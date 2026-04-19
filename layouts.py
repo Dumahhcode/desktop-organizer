@@ -105,6 +105,26 @@ def delete_mode(mode_name: str) -> bool:
     return True
 
 
+def rename_mode(old_name: str, new_name: str) -> bool:
+    """
+    Rename a mode. Returns False if the old mode is missing, the new name is
+    invalid, or another mode already uses the new name.
+    """
+    old = (old_name or "").strip()
+    new = (new_name or "").strip()
+    if not old or not new or old == new:
+        return False
+    if get_mode(new):
+        return False
+    data = load_layouts()
+    for m in data.get("modes", []):
+        if m.get("name") == old:
+            m["name"] = new
+            save_layouts(data)
+            return True
+    return False
+
+
 def add_app_to_mode(mode_name: str, app_config: dict) -> bool:
     """
     Append an app configuration dict to the named mode.
@@ -297,7 +317,8 @@ def capture_current_layout_to_mode(mode_name: str) -> int:
     snapshots: List[dict] = []
     for win in window_manager.list_open_windows():
         title = win.get("title") or ""
-        if "Desktop Organizer" in title:
+        tl = title.lower()
+        if "desktop organizer" in tl or "pywebview" in tl:
             continue
         proc = win.get("process_name") or ""
         if not proc:

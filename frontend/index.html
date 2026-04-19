@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>desktop organizer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app" class="app">
+    <aside class="sidebar">
+      <div class="logo-block" aria-hidden="true">
+        <span class="logo-d">d</span>
+      </div>
+      <div class="monitor-line">
+        <span class="glow-dot" id="mon-dot"></span>
+        <span id="mon-label">monitors: …</span>
+      </div>
+      <div class="sidebar-label">» modes</div>
+      <div id="mode-list" class="mode-list"></div>
+      <button type="button" id="btn-new-mode" class="btn-dashed">+ new mode</button>
+    </aside>
+    <main class="main">
+      <header class="hdr">
+        <div class="hdr-left">
+          <h1 class="mode-title">
+            <span id="mode-title-text">select a mode</span><span class="cursor-blink" id="mode-cursor">_</span>
+          </h1>
+          <div class="stats" id="stats-line">$ idle · apps=0 · monitors=0</div>
+        </div>
+        <div class="hdr-actions">
+          <button type="button" class="btn-ghost" id="btn-rename" title="rename mode">rename</button>
+          <button type="button" class="btn-ghost" id="btn-capture">capture</button>
+          <button type="button" class="btn-accent" id="btn-apply">▶ apply</button>
+        </div>
+      </header>
+      <section class="panel">
+        <div class="comment">// layout preview</div>
+        <div id="preview-wrap" class="preview-wrap">
+          <div id="preview" class="preview"></div>
+        </div>
+      </section>
+      <section class="panel apps-panel">
+        <div class="apps-head">
+          <span class="apps-label">» apps</span>
+          <button type="button" class="btn-small" id="btn-add-app">+ add</button>
+        </div>
+        <div id="apps-list" class="apps-list"></div>
+      </section>
+    </main>
+  </div>
+
+  <div id="backdrop" class="backdrop hidden"></div>
+
+  <div id="modal-add" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card">
+      <div class="modal-title" id="modal-add-title">» add app</div>
+      <label class="field-label">running window</label>
+      <div class="row">
+        <select id="fld-win" class="fld-select"></select>
+        <button type="button" class="btn-small" id="btn-refresh-wins">refresh</button>
+      </div>
+      <label class="field-label">process (.exe) or path</label>
+      <input id="fld-proc" class="fld-input" type="text" autocomplete="off" />
+      <label class="field-label">title contains (optional)</label>
+      <input id="fld-title" class="fld-input" type="text" autocomplete="off" />
+      <label class="field-label">launch if missing (optional)</label>
+      <input id="fld-launch" class="fld-input" type="text" autocomplete="off" />
+      <label class="field-label">monitor</label>
+      <div id="fld-monitors" class="radio-col"></div>
+      <label class="field-label">preset</label>
+      <div id="fld-presets" class="radio-col"></div>
+      <div id="fld-custom" class="custom-grid hidden">
+        <input class="fld-input" id="cx" type="number" placeholder="x" />
+        <input class="fld-input" id="cy" type="number" placeholder="y" />
+        <input class="fld-input" id="cw" type="number" placeholder="w" />
+        <input class="fld-input" id="ch" type="number" placeholder="h" />
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn-ghost" id="modal-add-cancel">cancel</button>
+        <button type="button" class="btn-accent" id="modal-add-save">save</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-picker" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card modal-narrow">
+      <div class="modal-title">» monitors changed</div>
+      <p class="hint" id="picker-hint"></p>
+      <div id="picker-modes" class="picker-modes"></div>
+      <button type="button" class="btn-ghost full" id="picker-dismiss">dismiss</button>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

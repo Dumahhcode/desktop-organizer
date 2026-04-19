@@ -9,7 +9,7 @@ from typing import Callable, Optional
 
 import layouts
 import pystray
-import ui
+import window_control
 from PIL import Image, ImageDraw
 
 
@@ -76,19 +76,19 @@ def _build_apply_mode_submenu_items():
 
 
 def _open_main(icon: pystray.Icon, item: pystray.MenuItem) -> None:
-    """Ask the UI thread to show the main organizer window."""
+    """Show the pywebview organizer window."""
     try:
-        ui.request_show_main()
+        window_control.show_main_window()
     except Exception as exc:
         print(f"[tray] open main window failed: {exc}")
 
 
 def _quit_app(icon: pystray.Icon, item: pystray.MenuItem) -> None:
-    """Stop the tray icon and signal the main process to exit."""
+    """Destroy the webview window and stop the tray icon."""
     try:
-        ui.request_shutdown()
+        window_control.request_quit()
     except Exception as exc:
-        print(f"[tray] shutdown request failed: {exc}")
+        print(f"[tray] request_quit failed: {exc}")
     shutdown_event.set()
     try:
         icon.stop()

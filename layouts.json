@@ -2,11 +2,325 @@
     "modes": [
         {
             "name": "Chill",
-            "apps": []
+            "apps": [
+                {
+                    "process_name": "cursor.exe",
+                    "window_title_match": "Cursor",
+                    "launch_path": "",
+                    "monitor_index": 0,
+                    "position": {
+                        "x": 0,
+                        "y": 0,
+                        "width": 1280,
+                        "height": 1392
+                    },
+                    "preset": "custom"
+                },
+                {
+                    "process_name": "claude.exe",
+                    "window_title_match": "Claude",
+                    "launch_path": "",
+                    "monitor_index": 0,
+                    "position": {
+                        "x": 1280,
+                        "y": 0,
+                        "width": 1280,
+                        "height": 1392
+                    },
+                    "preset": "custom"
+                },
+                {
+                    "process_name": "applicationframehost.exe",
+                    "window_title_match": "Settings",
+                    "launch_path": "",
+                    "monitor_index": 0,
+                    "position": {
+                        "x": 396,
+                        "y": 209,
+                        "width": 1215,
+                        "height": 940
+                    },
+                    "preset": "custom"
+                },
+                {
+                    "process_name": "spotify.exe",
+                    "window_title_match": "Queens of the Stone Age - No One Knows",
+                    "launch_path": "",
+                    "monitor_index": 1,
+                    "position": {
+                        "x": 2553,
+                        "y": 358,
+                        "width": 1721,
+                        "height": 1033
+                    },
+                    "preset": "custom"
+                },
+                {
+                    "process_name": "chrome.exe",
+                    "window_title_match": "Python Release Python install manager 26.1 | Python.org - Google Chrome",
+                    "launch_path": "",
+                    "monitor_index": 0,
+                    "position": {
+                        "x": 1273,
+                        "y": 0,
+                        "width": 1294,
+                        "height": 1399
+                    },
+                    "preset": "custom"
+                },
+                {
+                    "process_name": "cursor.exe",
+                    "window_title_match": "layouts.json - desktop-organizer - Cursor",
+                    "launch_path": "",
+                    "monitor_index": 0,
+                    "position": {
+                        "x": 82,
+                        "y": 87,
+                        "width": 1280,
+                        "height": 800
+                    },
+                    "preset": "custom"
+                },
+                {
+                    "process_name": "razerappengine.exe",
+                    "window_title_match": "Razer Synapse",
+                    "launch_path": "",
+                    "monitor_index": 0,
+                    "position": {
+                        "x": 640,
+                        "y": 336,
+                        "width": 1280,
+                        "height": 720
+                    },
+                    "preset": "custom"
+                },
+                {
+                    "process_name": "ghelper.exe",
+                    "window_title_match": "G-Helper - ROG Zephyrus G16 GU605CW",
+                    "launch_path": "",
+                    "monitor_index": 1,
+                    "position": {
+                        "x": 3847,
+                        "y": 574,
+                        "width": 414,
+                        "height": 804
+                    },
+                    "preset": "custom"
+                },
+                {
+                    "process_name": "rtkuwp.exe",
+                    "window_title_match": "Realtek Audio Console",
+                    "launch_path": "",
+                    "monitor_index": 0,
+                    "position": {
+                        "x": 0,
+                        "y": 1,
+                        "width": 1800,
+                        "height": 1398
+                    },
+                    "preset": "custom"
+                },
+                {
+                    "process_name": "applicationframehost.exe",
+                    "window_title_match": "Realtek Audio Console",
+                    "launch_path": "",
+                    "monitor_index": 0,
+                    "position": {
+                        "x": 59,
+                        "y": 48,
+                        "width": 1822,
+                        "height": 1410
+                    },
+                    "preset": "custom"
+                },
+                {
+                    "process_name": "textinputhost.exe",
+                    "window_title_match": "Windows Input Experience",
+                    "launch_path": "",
+                    "monitor_index": 0,
+                    "position": {
+                        "x": 0,
+                        "y": 0,
+                        "width": 2560,
+                        "height": 1600
+                    },
+                    "preset": "custom"
+                },
+                {
+                    "process_name": "chrome.exe",
+                    "window_title_match": "25-26 ES S2U7D7 and 8 Exhibit preparation worksheet - Google Docs - Google Chrome",
+                    "launch_path": "",
+                    "monitor_index": 0,
+                    "position": {
+                        "x": -32000,
+                        "y": -32000,
+                        "width": 237,
+                        "height": 39
+                    },
+                    "preset": "custom"
+                }
+            ]
         },
         {
             "name": "Work",
-            "apps": []
+            "apps": [
+                {
+                    "process_name": "cursor.exe",
+                    "window_title_match": "Cursor",
+                    "launch_path": "",
+                    "monitor_index": 0,
+                    "position": {
+                        "x": 0,
+                        "y": 0,
+                        "width": 1280,
+                        "height": 1392
+                    },
+                    "preset": "custom"
+                },
+                {
+                    "process_name": "claude.exe",
+                    "window_title_match": "Claude",
+                    "launch_path": "",
+                    "monitor_index": 0,
+                    "position": {
+                        "x": 1280,
+                        "y": 0,
+                        "width": 1280,
+                        "height": 1392
+                    },
+                    "preset": "custom"
+                },
+                {
+                    "process_name": "applicationframehost.exe",
+                    "window_title_match": "Settings",
+                    "launch_path": "",
+                    "monitor_index": 0,
+                    "position": {
+                        "x": 396,
+                        "y": 209,
+                        "width": 1215,
+                        "height": 940
+                    },
+                    "preset": "custom"
+                },
+                {
+                    "process_name": "spotify.exe",
+                    "window_title_match": "Queens of the Stone Age - No One Knows",
+                    "launch_path": "",
+                    "monitor_index": 1,
+                    "position": {
+                        "x": 2553,
+                        "y": 358,
+                        "width": 1721,
+                        "height": 1033
+                    },
+                    "preset": "custom"
+                },
+                {
+                    "process_name": "chrome.exe",
+                    "window_title_match": "Python Release Python install manager 26.1 | Python.org - Google Chrome",
+                    "launch_path": "",
+                    "monitor_index": 0,
+                    "position": {
+                        "x": 1273,
+                        "y": 0,
+                        "width": 1294,
+                        "height": 1399
+                    },
+                    "preset": "custom"
+                },
+                {
+                    "process_name": "cursor.exe",
+                    "window_title_match": "layouts.json - desktop-organizer - Cursor",
+                    "launch_path": "",
+                    "monitor_index": 0,
+                    "position": {
+                        "x": 82,
+                        "y": 87,
+                        "width": 1280,
+                        "height": 800
+                    },
+                    "preset": "custom"
+                },
+                {
+                    "process_name": "razerappengine.exe",
+                    "window_title_match": "Razer Synapse",
+                    "launch_path": "",
+                    "monitor_index": 0,
+                    "position": {
+                        "x": 640,
+                        "y": 336,
+                        "width": 1280,
+                        "height": 720
+                    },
+                    "preset": "custom"
+                },
+                {
+                    "process_name": "ghelper.exe",
+                    "window_title_match": "G-Helper - ROG Zephyrus G16 GU605CW",
+                    "launch_path": "",
+                    "monitor_index": 1,
+                    "position": {
+                        "x": 3847,
+                        "y": 574,
+                        "width": 414,
+                        "height": 804
+                    },
+                    "preset": "custom"
+                },
+                {
+                    "process_name": "rtkuwp.exe",
+                    "window_title_match": "Realtek Audio Console",
+                    "launch_path": "",
+                    "monitor_index": 0,
+                    "position": {
+                        "x": 0,
+                        "y": 1,
+                        "width": 1800,
+                        "height": 1398
+                    },
+                    "preset": "custom"
+                },
+                {
+                    "process_name": "applicationframehost.exe",
+                    "window_title_match": "Realtek Audio Console",
+                    "launch_path": "",
+                    "monitor_index": 0,
+                    "position": {
+                        "x": 59,
+                        "y": 48,
+                        "width": 1822,
+                        "height": 1410
+                    },
+                    "preset": "custom"
+                },
+                {
+                    "process_name": "textinputhost.exe",
+                    "window_title_match": "Windows Input Experience",
+                    "launch_path": "",
+                    "monitor_index": 0,
+                    "position": {
+                        "x": 0,
+                        "y": 0,
+                        "width": 2560,
+                        "height": 1600
+                    },
+                    "preset": "custom"
+                },
+                {
+                    "process_name": "chrome.exe",
+                    "window_title_match": "25-26 ES S2U7D7 and 8 Exhibit preparation worksheet - Google Docs - Google Chrome",
+                    "launch_path": "",
+                    "monitor_index": 0,
+                    "position": {
+                        "x": -32000,
+                        "y": -32000,
+                        "width": 237,
+                        "height": 39
+                    },
+                    "preset": "custom"
+                }
+            ]
         }
     ]
 }
