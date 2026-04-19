@@ -6,13 +6,53 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import window_manager
 
-_LAYOUT_PATH = Path(__file__).resolve().parent / "layouts.json"
+
+def _get_user_data_dir() -> Path:
+    """
+    Return the folder where user-editable data (layouts.json) lives.
+
+    Uses %APPDATA%\\DesktopOrganizer on Windows so the file persists across
+    application updates and PyInstaller bundle extractions.
+    """
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        return Path(appdata) / "DesktopOrganizer"
+    return Path.home() / ".desktop-organizer"
+
+
+def _get_bundled_default_path() -> Path:
+    """Return the path to the bundled default layouts.json (read-only)."""
+    if getattr(sys, "frozen", False):
+        base = Path(sys._MEIPASS)  # type: ignore[attr-defined]
+    else:
+        base = Path(__file__).resolve().parent
+    return base / "layouts.json"
+
+
+def _get_layout_path() -> Path:
+    """Return the active layouts.json path, seeding from bundled default if needed."""
+    user_dir = _get_user_data_dir()
+    user_dir.mkdir(parents=True, exist_ok=True)
+    user_path = user_dir / "layouts.json"
+    if not user_path.exists():
+        # Seed from bundled default if present, otherwise create empty.
+        bundled = _get_bundled_default_path()
+        if bundled.exists():
+            try:
+                user_path.write_text(bundled.read_text(encoding="utf-8"), encoding="utf-8")
+            except Exception as exc:
+                print(f"[layouts] seed from bundled default failed: {exc}")
+                user_path.write_text(json.dumps(_default_data(), indent=4), encoding="utf-8")
+        else:
+            user_path.write_text(json.dumps(_default_data(), indent=4), encoding="utf-8")
+    return user_path
 
 
 def _default_data() -> dict:
@@ -24,12 +64,9 @@ def load_layouts() -> dict:
     """
     Load layouts from layouts.json, creating a default file if missing or invalid.
     """
-    if not _LAYOUT_PATH.exists():
-        data = _default_data()
-        save_layouts(data)
-        return data
+    path = _get_layout_path()
     try:
-        text = _LAYOUT_PATH.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8")
         data = json.loads(text)
         if not isinstance(data, dict) or "modes" not in data:
             raise ValueError("invalid root")
@@ -47,8 +84,9 @@ def save_layouts(data: dict) -> None:
     """
     Persist the full layouts document to layouts.json.
     """
+    path = _get_layout_path()
     try:
-        _LAYOUT_PATH.write_text(
+        path.write_text(
             json.dumps(data, indent=4, ensure_ascii=False) + "\n",
             encoding="utf-8",
         )
@@ -207,9 +245,6 @@ def rect_for_preset(
 ) -> tuple:
     """
     Compute (x, y, width, height) in screen coordinates for a preset on a monitor.
-
-    Supported presets: left_half, right_half, top_half, bottom_half, maximized,
-    custom. For custom, position must include x, y, width, height in screen space.
     """
     mx, my, mw, mh = monitor_bounds
     preset_key = (preset or "custom").strip().lower()
@@ -239,8 +274,6 @@ def rect_for_preset(
 def apply_mode(mode_name: str) -> None:
     """
     Apply a saved mode: launch missing apps, then move matching windows into place.
-
-    Errors are printed to the console; this function does not raise for common failures.
     """
     mode = get_mode(mode_name)
     if not mode:
@@ -306,9 +339,6 @@ def _apply_single_app(app: dict, monitors: List[dict]) -> None:
 def capture_current_layout_to_mode(mode_name: str) -> int:
     """
     Replace the named mode's apps with a snapshot of currently open windows.
-
-    Excludes this application's own organizer windows by title substring.
-    Returns the number of captured apps.
     """
     label = (mode_name or "").strip()
     if not get_mode(label):
@@ -341,3 +371,4 @@ def capture_current_layout_to_mode(mode_name: str) -> int:
             break
     save_layouts(data)
     return len(snapshots)
+    

@@ -7,6 +7,7 @@ Desktop Organizer entry point: pywebview UI, tray icon, and monitor watcher.
 from __future__ import annotations
 
 import json
+import sys
 import threading
 from pathlib import Path
 
@@ -15,6 +16,19 @@ import tray
 import webview
 import window_control
 from bridge import Bridge
+
+
+def _get_base_path() -> Path:
+    """
+    Return the folder that contains bundled resources (frontend, layouts.json).
+
+    When running as a PyInstaller .exe, resources live in a temporary directory
+    exposed by ``sys._MEIPASS``. When running as a normal script, they live next
+    to this file.
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys._MEIPASS)  # type: ignore[attr-defined]
+    return Path(__file__).resolve().parent
 
 
 def _notify_monitor_js(count: int) -> None:
@@ -56,7 +70,8 @@ def _monitor_worker() -> None:
 def main() -> None:
     """Create the webview window, register tray + monitor threads, then run the GUI loop."""
     bridge = Bridge()
-    html_path = Path(__file__).resolve().parent / "frontend" / "index.html"
+    base_path = _get_base_path()
+    html_path = base_path / "frontend" / "index.html"
     url = html_path.as_uri()
 
     window = webview.create_window(
