@@ -2,6 +2,7 @@ import ctypes
 import time
 
 
+
 def get_monitor_count():
     """
     Return the number of display monitors attached to the desktop.

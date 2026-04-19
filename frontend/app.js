@@ -1,517 +1,554 @@
-/**
- * desktop organizer — webview frontend
- */
+// ================================================================
+// desktop.organizer — frontend logic
+// talks to Python via window.pywebview.api (see bridge.py)
+// ================================================================
 
-const MODE_DOTS = ["#5dcaa5", "#ef9f27", "#d4537e"];
+const MODE_COLORS = ["#8fa3ff", "#5dcaa5", "#ef9f27", "#d4537e", "#F0997B"];
+const PRESET_COLORS = {
+  left_half:   "#8fa3ff",
+  right_half:  "#5dcaa5",
+  top_half:    "#ef9f27",
+  bottom_half: "#d4537e",
+  maximized:   "#F0997B",
+  custom:      "#8fa3ff",
+};
+const PRESETS = ["left_half", "right_half", "top_half", "bottom_half", "maximized", "custom"];
 
-function api() {
-  const p = window.pywebview && window.pywebview.api;
-  if (!p) throw new Error("pywebview api not ready");
-  return p;
-}
+const state = {
+  modes: [],
+  selected: null,
+  monitors: [],
+  openWindows: [],
+  editIndex: null,
+  statsTimer: null,
+};
 
-async function callApi(name, ...args) {
-  const fn = api()[name];
-  if (typeof fn !== "function") throw new Error("missing api: " + name);
-  return await fn(...args);
-}
+// --- helpers ----------------------------------------------------
 
-let selectedMode = null;
-let editAppIndex = null;
+const $ = (id) => document.getElementById(id);
 
-function $(id) {
-  return document.getElementById(id);
-}
+const api = () => (window.pywebview && window.pywebview.api) || null;
 
-function rectForPreset(bounds, preset, position) {
-  const [mx, my, mw, mh] = bounds;
-  const key = (preset || "custom").toLowerCase();
-  if (key === "maximized") return [mx, my, mw, mh];
-  if (key === "left_half") return [mx, my, Math.floor(mw / 2), mh];
-  if (key === "right_half") {
-    const w = mw - Math.floor(mw / 2);
-    return [mx + Math.floor(mw / 2), my, w, mh];
-  }
-  if (key === "top_half") return [mx, my, mw, Math.floor(mh / 2)];
-  if (key === "bottom_half") {
-    const h = mh - Math.floor(mh / 2);
-    return [mx, my + Math.floor(mh / 2), mw, h];
-  }
-  const pos = position || {};
-  const x = Number(pos.x ?? mx);
-  const y = Number(pos.y ?? my);
-  const w = Math.max(1, Number(pos.width ?? mw));
-  const h = Math.max(1, Number(pos.height ?? mh));
-  return [x, y, w, h];
-}
-
-async function refreshMonitorBadge() {
-  try {
-    const n = await callApi("get_monitor_count");
-    $("mon-label").textContent = "monitors: " + n;
-  } catch (e) {
-    $("mon-label").textContent = "monitors: ?";
-  }
-}
-
-async function loadModeList() {
-  const data = await callApi("get_modes");
-  const modes = data.modes || [];
-  const el = $("mode-list");
-  el.innerHTML = "";
-  modes.forEach((m, i) => {
-    const name = (m.name || "").toLowerCase();
-    const apps = (m.apps || []).length;
-    const dot = MODE_DOTS[i % MODE_DOTS.length];
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "mode-item" + (selectedMode === m.name ? " active" : "");
-    btn.dataset.name = m.name;
-    btn.innerHTML =
-      '<span class="mode-dot" style="background:' +
-      dot +
-      '"></span><span>' +
-      escapeHtml(name) +
-      '</span><span class="mode-meta">' +
-      apps +
-      "</span>";
-    btn.addEventListener("click", () => selectMode(m.name));
-    el.appendChild(btn);
+function waitForApi() {
+  return new Promise((resolve) => {
+    if (api()) return resolve();
+    const t = setInterval(() => {
+      if (api()) { clearInterval(t); resolve(); }
+    }, 50);
   });
+}
+
+function toast(msg, ms = 1600) {
+  const el = $("toast");
+  el.textContent = msg;
+  el.classList.remove("hidden");
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.classList.add("hidden"), ms);
+}
+
+function modeColor(name) {
+  let h = 0;
+  for (const c of name) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return MODE_COLORS[h % MODE_COLORS.length];
+}
+
+function hexWithAlpha(hex, alpha) {
+  const n = parseInt(hex.slice(1), 16);
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  return `rgba(${r},${g},${b},${alpha})`;
 }
 
 function escapeHtml(s) {
-  const d = document.createElement("div");
-  d.textContent = s;
-  return d.innerHTML;
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[c]));
 }
 
-async function selectMode(name) {
-  selectedMode = name;
-  $("mode-title-text").textContent = (name || "").toLowerCase();
-  await refreshStats();
-  await renderPreview();
-  await renderApps();
-  await loadModeList();
+function shortProcName(p) {
+  if (!p) return "—";
+  return p.replace(/^.*[\\/]/, "").toLowerCase();
+}
+
+// --- data loading ----------------------------------------------
+
+async function loadAll() {
+  const [modesDoc, monitors] = await Promise.all([
+    api().get_modes(),
+    api().get_monitors(),
+  ]);
+  state.modes = (modesDoc && modesDoc.modes) || [];
+  state.monitors = monitors || [];
+  renderSidebar();
+  updateMonitorStatus();
+  if (state.selected && !state.modes.find(m => m.name === state.selected)) {
+    state.selected = null;
+  }
+  if (!state.selected && state.modes.length) {
+    state.selected = state.modes[0].name;
+  }
+  renderDetail();
+}
+
+function updateMonitorStatus() {
+  const n = state.monitors.length;
+  const label = $("mon-label");
+  const dot = $("mon-dot");
+  if (n === 0) {
+    label.textContent = "no monitors";
+    dot.classList.add("warn");
+  } else {
+    label.textContent = `${n} monitor${n > 1 ? "s" : ""} · ${n > 1 ? "docked" : "undocked"}`;
+    dot.classList.remove("warn");
+  }
+}
+
+// --- sidebar ----------------------------------------------------
+
+function renderSidebar() {
+  const list = $("mode-list");
+  list.innerHTML = "";
+  if (!state.modes.length) {
+    const empty = document.createElement("div");
+    empty.style.cssText = "color: var(--muted-3); font-size: 11px; padding: 16px 4px; text-align: center;";
+    empty.textContent = "no modes yet";
+    list.appendChild(empty);
+    return;
+  }
+  for (const mode of state.modes) {
+    const btn = document.createElement("button");
+    btn.className = "mode-item" + (mode.name === state.selected ? " active" : "");
+    btn.type = "button";
+    const count = (mode.apps || []).length;
+    const color = modeColor(mode.name);
+    btn.innerHTML = `
+      <span class="dot" style="background:${color}"></span>
+      <span>${escapeHtml(mode.name.toLowerCase())}</span>
+      <span class="count">${count}</span>
+    `;
+    btn.onclick = () => { state.selected = mode.name; renderSidebar(); renderDetail(); };
+    list.appendChild(btn);
+  }
+}
+
+// --- detail pane ------------------------------------------------
+
+function currentMode() {
+  return state.modes.find(m => m.name === state.selected) || null;
+}
+
+function renderDetail() {
+  const mode = currentMode();
+  const titleEl = $("mode-title-text");
+  const statsEl = $("stats-line");
+  const hasMode = !!mode;
+
+  // disable action buttons when no mode selected
+  for (const id of ["btn-rename", "btn-delete", "btn-capture", "btn-apply", "btn-add-app"]) {
+    $(id).disabled = !hasMode;
+  }
+
+  if (!hasMode) {
+    titleEl.textContent = "no mode selected";
+    statsEl.innerHTML = `<span class="t-ok">$</span> idle`;
+    $("preview").innerHTML = `<div class="empty-preview">select or create a mode</div>`;
+    $("apps-list").innerHTML = "";
+    return;
+  }
+
+  titleEl.textContent = mode.name.toLowerCase();
+  refreshStats();
+  renderPreview();
+  renderApps();
 }
 
 async function refreshStats() {
-  if (!selectedMode) {
-    try {
-      const mons = await callApi("get_monitors");
-      $("stats-line").innerHTML =
-        "$ idle · apps=<span class='hl'>0</span> · monitors=<span class='hl'>" +
-        mons.length +
-        "</span>";
-    } catch (_) {
-      $("stats-line").innerHTML =
-        "$ idle · apps=<span class='hl'>0</span> · monitors=<span class='hl'>?</span>";
-    }
-    return;
-  }
-  const st = await callApi("get_mode_stats", selectedMode);
-  $("stats-line").innerHTML =
-    "$ last_applied=<span class='hl'>" +
-    escapeHtml(st.last_applied) +
-    "</span> · apps=<span class='hl'>" +
-    st.apps +
-    "</span> · monitors=<span class='hl'>" +
-    st.monitors +
-    "</span>";
+  const mode = currentMode();
+  if (!mode) return;
+  try {
+    const s = await api().get_mode_stats(mode.name);
+    $("stats-line").innerHTML =
+      `<span class="t-ok">$</span> last_applied=<span class="t-warn">${s.last_applied}</span>` +
+      ` · apps=<span class="t-warn">${s.apps}</span>` +
+      ` · monitors=<span class="t-warn">${s.monitors}</span>`;
+  } catch (e) { /* ignore */ }
 }
 
-async function renderPreview() {
-  const box = $("preview");
-  box.innerHTML = "";
-  const mons = await callApi("get_monitors");
-  if (!mons.length) {
-    box.textContent = "// no monitors";
+// --- preview ----------------------------------------------------
+
+function renderPreview() {
+  const wrap = $("preview");
+  wrap.innerHTML = "";
+  const mode = currentMode();
+  if (!mode || !state.monitors.length) {
+    wrap.innerHTML = `<div class="empty-preview">no monitors detected</div>`;
     return;
   }
-  let minX = Infinity,
-    minY = Infinity,
-    maxX = -Infinity,
-    maxY = -Infinity;
-  mons.forEach((m) => {
-    minX = Math.min(minX, m.x);
-    minY = Math.min(minY, m.y);
-    maxX = Math.max(maxX, m.x + m.width);
-    maxY = Math.max(maxY, m.y + m.height);
-  });
-  const totalW = maxX - minX;
-  const totalH = maxY - minY;
-  const wrap = $("preview-wrap");
-  const pw = Math.max(wrap.clientWidth - 8, 120);
-  const ph = 200;
-  const pad = 10;
-  const scale = Math.min((pw - 2 * pad) / totalW, (ph - 2 * pad) / totalH, 1);
-  box.style.height = ph + "px";
 
-  mons.forEach((m) => {
-    const d = document.createElement("div");
-    d.className = "mon-rect";
-    const x = pad + (m.x - minX) * scale;
-    const y = pad + (m.y - minY) * scale;
-    const w = m.width * scale;
-    const h = m.height * scale;
-    d.style.left = x + "px";
-    d.style.top = y + "px";
-    d.style.width = w + "px";
-    d.style.height = h + "px";
-    const lab = document.createElement("div");
-    lab.className = "mon-label";
-    lab.textContent = m.width + "×" + m.height + (m.is_primary ? " · primary" : "");
-    d.appendChild(lab);
-    box.appendChild(d);
-  });
+  // compute scale so widest arrangement fits in ~560px, heights bounded too
+  const maxW = 560, maxH = 140;
+  let totalW = 0, maxMonH = 0;
+  for (const m of state.monitors) { totalW += m.width; maxMonH = Math.max(maxMonH, m.height); }
+  const scale = Math.min(maxW / Math.max(1, totalW + (state.monitors.length - 1) * 20), maxH / Math.max(1, maxMonH));
 
-  const mode = selectedMode ? await callApi("get_mode", selectedMode) : null;
-  const apps = (mode && mode.apps) || [];
-  for (const app of apps) {
-    let bounds = null;
-    for (const mon of mons) {
-      if (Number(mon.index) === Number(app.monitor_index)) {
-        bounds = [mon.x, mon.y, mon.width, mon.height];
-        break;
-      }
+  // group each monitor with a caption
+  const container = document.createElement("div");
+  container.style.cssText = "display:flex; gap:16px; justify-content:center; align-items:flex-start; width:100%;";
+  for (const m of state.monitors) {
+    const g = document.createElement("div");
+    g.className = "mon-group";
+
+    const rect = document.createElement("div");
+    rect.className = "mon-rect";
+    rect.style.width = Math.round(m.width * scale) + "px";
+    rect.style.height = Math.round(m.height * scale) + "px";
+
+    // place app rects for this monitor
+    for (const app of (mode.apps || [])) {
+      if (app.monitor_index !== m.index) continue;
+      const geo = resolveAppGeometry(app, m);
+      if (!geo) continue;
+      const el = document.createElement("div");
+      el.className = "app-rect";
+      const color = PRESET_COLORS[app.preset] || "#8fa3ff";
+      el.style.background = hexWithAlpha(color, 0.10);
+      el.style.border = `0.5px solid ${color}`;
+      el.style.color = color;
+      // position relative to monitor origin
+      const relX = Math.max(0, (geo.x - m.x) * scale);
+      const relY = Math.max(0, (geo.y - m.y) * scale);
+      const relW = Math.min(m.width * scale - relX, geo.w * scale);
+      const relH = Math.min(m.height * scale - relY, geo.h * scale);
+      el.style.left = Math.round(relX) + "px";
+      el.style.top = Math.round(relY) + "px";
+      el.style.width = Math.max(8, Math.round(relW)) + "px";
+      el.style.height = Math.max(8, Math.round(relH)) + "px";
+      el.textContent = shortProcName(app.process_name).replace(".exe", "");
+      rect.appendChild(el);
     }
-    if (!bounds && mons[0]) bounds = [mons[0].x, mons[0].y, mons[0].width, mons[0].height];
-    if (!bounds) continue;
-    const [rx, ry, rw, rh] = rectForPreset(
-      bounds,
-      app.preset || "custom",
-      app.position || {}
-    );
-    const d = document.createElement("div");
-    d.className = "app-rect";
-    d.style.left = pad + (rx - minX) * scale + "px";
-    d.style.top = pad + (ry - minY) * scale + "px";
-    d.style.width = Math.max(2, rw * scale) + "px";
-    d.style.height = Math.max(2, rh * scale) + "px";
-    box.appendChild(d);
+
+    g.appendChild(rect);
+    const cap = document.createElement("div");
+    cap.className = "mon-caption";
+    cap.textContent = `mon_${m.index + 1} · ${m.width}×${m.height}${m.is_primary ? " · primary" : ""}`;
+    g.appendChild(cap);
+    container.appendChild(g);
   }
+  wrap.appendChild(container);
 }
 
-async function renderApps() {
-  const el = $("apps-list");
-  el.innerHTML = "";
-  if (!selectedMode) {
-    el.innerHTML = '<div class="hint">select a mode from the sidebar</div>';
-    return;
-  }
-  const mode = await callApi("get_mode", selectedMode);
+function resolveAppGeometry(app, mon) {
+  const preset = (app.preset || "custom").toLowerCase();
+  const { x, y, width, height } = mon;
+  if (preset === "maximized") return { x, y, w: width, h: height };
+  if (preset === "left_half") return { x, y, w: Math.floor(width / 2), h: height };
+  if (preset === "right_half") return { x: x + Math.floor(width / 2), y, w: width - Math.floor(width / 2), h: height };
+  if (preset === "top_half") return { x, y, w: width, h: Math.floor(height / 2) };
+  if (preset === "bottom_half") return { x, y: y + Math.floor(height / 2), w: width, h: height - Math.floor(height / 2) };
+  const p = app.position || {};
+  return { x: p.x ?? x, y: p.y ?? y, w: p.width ?? width, h: p.height ?? height };
+}
+
+// --- apps list --------------------------------------------------
+
+function renderApps() {
+  const list = $("apps-list");
+  list.innerHTML = "";
+  const mode = currentMode();
   const apps = (mode && mode.apps) || [];
   if (!apps.length) {
-    el.innerHTML = '<div class="hint">no apps — use + add or capture</div>';
+    list.innerHTML = `<div class="empty-apps">no apps yet — click <span style="color:var(--accent)">+ add</span> to define one</div>`;
     return;
   }
   apps.forEach((app, idx) => {
     const row = document.createElement("div");
     row.className = "app-row";
-    const proc = (app.process_name || "").toLowerCase();
-    const meta =
-      "m" +
-      (app.monitor_index ?? 0) +
-      " · " +
-      (app.preset || "custom").toLowerCase();
-    row.innerHTML =
-      '<span class="arrow">▸</span><span class="pname">' +
-      escapeHtml(proc) +
-      '</span><span class="meta">' +
-      escapeHtml(meta) +
-      '</span><div class="menu-wrap"><button type="button" class="menu-btn">···</button><div class="menu-dd hidden"></div></div>';
+    row.innerHTML = `
+      <span class="arrow">▸</span>
+      <span class="pname">${escapeHtml(shortProcName(app.process_name))}</span>
+      <span class="mon">mon_${(app.monitor_index ?? 0) + 1}</span>
+      <span class="preset">${escapeHtml((app.preset || "custom").toLowerCase())}</span>
+      <span class="menu" data-idx="${idx}">···</span>
+    `;
+    const menuBtn = row.querySelector(".menu");
+    menuBtn.onclick = (e) => { e.stopPropagation(); openRowMenu(menuBtn, idx); };
+    list.appendChild(row);
+  });
+}
 
-    const btn = row.querySelector(".menu-btn");
-    const dd = row.querySelector(".menu-dd");
-    btn.addEventListener("click", (ev) => {
-      ev.stopPropagation();
-      const willOpen = dd.classList.contains("hidden");
-      document.querySelectorAll(".menu-dd").forEach((x) => {
-        if (x !== dd) x.classList.add("hidden");
-      });
-      if (!willOpen) {
-        dd.classList.add("hidden");
-        return;
+function openRowMenu(anchor, idx) {
+  document.querySelectorAll(".menu-dd").forEach(n => n.remove());
+  const dd = document.createElement("div");
+  dd.className = "menu-dd";
+  dd.innerHTML = `
+    <button type="button" data-act="edit">edit</button>
+    <button type="button" class="danger" data-act="delete">delete</button>
+  `;
+  anchor.appendChild(dd);
+  const closeOn = (ev) => { if (!dd.contains(ev.target)) { dd.remove(); document.removeEventListener("click", closeOn); } };
+  setTimeout(() => document.addEventListener("click", closeOn), 0);
+  dd.querySelectorAll("button").forEach(b => {
+    b.onclick = async () => {
+      const act = b.dataset.act;
+      dd.remove();
+      if (act === "edit") openAppModal(idx);
+      if (act === "delete") {
+        const mode = currentMode();
+        await api().remove_app_from_mode(mode.name, idx);
+        await loadAll();
       }
-      dd.innerHTML =
-        '<button type="button" data-act="edit">edit</button><button type="button" data-act="del">delete</button>';
-      dd.querySelector('[data-act="edit"]').onclick = () => {
-        dd.classList.add("hidden");
-        openAddDialog(idx);
-      };
-      dd.querySelector('[data-act="del"]').onclick = async () => {
-        dd.classList.add("hidden");
-        await callApi("remove_app_from_mode", selectedMode, idx);
-        await selectMode(selectedMode);
-      };
-      dd.classList.remove("hidden");
-    });
-    el.appendChild(row);
+    };
   });
 }
 
-document.addEventListener("click", () => {
-  document.querySelectorAll(".menu-dd").forEach((d) => d.classList.add("hidden"));
-});
+// --- add / edit app modal --------------------------------------
 
-function showModal(id, show) {
-  const m = $(id);
-  const bd = $("backdrop");
-  if (show) {
-    m.classList.remove("hidden");
-    bd.classList.remove("hidden");
-  } else {
-    m.classList.add("hidden");
-    if (!document.querySelector(".modal:not(.hidden)")) bd.classList.add("hidden");
-  }
-}
+async function openAppModal(editIdx = null) {
+  state.editIndex = editIdx;
+  state.openWindows = await api().get_open_windows();
+  const mode = currentMode();
 
-async function fillWindowSelect() {
-  const wins = await callApi("get_open_windows");
+  $("modal-add-title").textContent = editIdx === null ? "» add app" : "» edit app";
+
+  // running windows dropdown
   const sel = $("fld-win");
-  sel.innerHTML = "";
-  wins.forEach((w) => {
-    const o = document.createElement("option");
-    const t = (w.title || "").slice(0, 80);
-    o.value = JSON.stringify({ process_name: w.process_name, title: t });
-    o.textContent = (w.process_name || "") + " — " + t;
-    sel.appendChild(o);
-  });
-  if (!wins.length) {
-    const o = document.createElement("option");
-    o.value = "{}";
-    o.textContent = "(no windows)";
-    sel.appendChild(o);
+  sel.innerHTML = `<option value="">— pick one —</option>`;
+  for (const w of state.openWindows) {
+    const opt = document.createElement("option");
+    opt.value = w.process_name + "|" + w.title;
+    const label = `${w.process_name}${w.title ? " · " + w.title.slice(0, 50) : ""}`;
+    opt.textContent = label;
+    sel.appendChild(opt);
   }
-}
+  sel.onchange = () => {
+    const v = sel.value;
+    if (!v) return;
+    const [proc, title] = v.split("|");
+    $("fld-proc").value = proc;
+    $("fld-title").value = title || "";
+  };
 
-function onWinSelectChange() {
-  try {
-    const v = JSON.parse($("fld-win").value || "{}");
-    if (v.process_name) $("fld-proc").value = v.process_name;
-  } catch (_) {}
-}
-
-async function fillMonitorsRadios() {
-  const mons = await callApi("get_monitors");
-  const host = $("fld-monitors");
-  host.innerHTML = "";
-  mons.forEach((m) => {
-    const id = "mon-" + m.index;
-    const lab = document.createElement("label");
-    lab.innerHTML =
-      '<input type="radio" name="mon" value="' +
-      m.index +
-      '" id="' +
-      id +
-      '" ' +
-      (m.is_primary ? "checked" : "") +
-      " /> " +
-      m.index +
-      " · " +
-      m.width +
-      "×" +
-      m.height +
-      (m.is_primary ? " · primary" : "");
-    host.appendChild(lab);
+  // monitors
+  const monBox = $("fld-monitors");
+  monBox.innerHTML = "";
+  state.monitors.forEach(m => {
+    const lbl = document.createElement("label");
+    lbl.innerHTML = `<input type="radio" name="mon" value="${m.index}" /> mon_${m.index + 1} · ${m.width}×${m.height}${m.is_primary ? " · primary" : ""}`;
+    monBox.appendChild(lbl);
   });
-}
 
-function fillPresets() {
-  const host = $("fld-presets");
-  const presets = [
-    ["left_half", "left half"],
-    ["right_half", "right half"],
-    ["top_half", "top half"],
-    ["bottom_half", "bottom half"],
-    ["maximized", "maximized"],
-    ["custom", "custom"],
-  ];
-  host.innerHTML = "";
-  presets.forEach(([val, label], i) => {
-    const id = "pr-" + val;
-    const lab = document.createElement("label");
-    lab.innerHTML =
-      '<input type="radio" name="preset" value="' +
-      val +
-      '" id="' +
-      id +
-      '" ' +
-      (i === 0 ? "checked" : "") +
-      " /> " +
-      label;
-    host.appendChild(lab);
+  // presets
+  const preBox = $("fld-presets");
+  preBox.innerHTML = "";
+  PRESETS.forEach(p => {
+    const lbl = document.createElement("label");
+    lbl.innerHTML = `<input type="radio" name="preset" value="${p}" /> ${p}`;
+    preBox.appendChild(lbl);
   });
-  host.querySelectorAll('input[name="preset"]').forEach((r) => {
-    r.addEventListener("change", () => {
-      const c = $("fld-custom");
-      const v = (host.querySelector('input[name="preset"]:checked') || {}).value;
-      c.classList.toggle("hidden", v !== "custom");
-    });
-  });
-}
+  preBox.onchange = () => {
+    const val = preBox.querySelector('input[name="preset"]:checked')?.value;
+    $("fld-custom").classList.toggle("hidden", val !== "custom");
+  };
 
-function presetRadio(value) {
-  return $("fld-presets").querySelector('input[name="preset"][value="' + value + '"]');
-}
-
-async function openAddDialog(editIndex) {
-  editAppIndex = editIndex == null ? null : Number(editIndex);
-  $("modal-add-title").textContent = editAppIndex == null ? "» add app" : "» edit app";
-  $("fld-proc").value = "";
-  $("fld-title").value = "";
-  $("fld-launch").value = "";
-  $("cx").value = $("cy").value = $("cw").value = $("ch").value = "";
-
-  await fillWindowSelect();
-  await fillMonitorsRadios();
-  fillPresets();
-  $("fld-win").onchange = onWinSelectChange;
-  onWinSelectChange();
-
-  if (editAppIndex != null && selectedMode) {
-    const mode = await callApi("get_mode", selectedMode);
-    const app = (mode.apps || [])[editAppIndex];
-    if (app) {
-      $("fld-proc").value = (app.process_name || "").toLowerCase();
-      $("fld-title").value = app.window_title_match || "";
-      $("fld-launch").value = app.launch_path || "";
-      const pr = (app.preset || "custom").toLowerCase();
-      const prEl = presetRadio(pr);
-      if (prEl) prEl.checked = true;
-      const pos = app.position || {};
-      $("cx").value = pos.x ?? "";
-      $("cy").value = pos.y ?? "";
-      $("cw").value = pos.width ?? "";
-      $("ch").value = pos.height ?? "";
-      const mi = String(app.monitor_index ?? 0);
-      const mr = $("fld-monitors").querySelector('input[name="mon"][value="' + mi + '"]');
-      if (mr) mr.checked = true;
-    }
+  // populate for edit
+  if (editIdx !== null) {
+    const app = mode.apps[editIdx];
+    $("fld-proc").value = app.process_name || "";
+    $("fld-title").value = app.window_title_match || "";
+    $("fld-launch").value = app.launch_path || "";
+    const monR = monBox.querySelector(`input[name="mon"][value="${app.monitor_index ?? 0}"]`);
+    if (monR) monR.checked = true; else monBox.querySelector('input[name="mon"]')?.click();
+    const preR = preBox.querySelector(`input[name="preset"][value="${app.preset || "custom"}"]`);
+    if (preR) preR.checked = true;
+    $("fld-custom").classList.toggle("hidden", (app.preset || "custom") !== "custom");
+    const p = app.position || {};
+    $("cx").value = p.x ?? ""; $("cy").value = p.y ?? "";
+    $("cw").value = p.width ?? ""; $("ch").value = p.height ?? "";
+  } else {
+    $("fld-proc").value = ""; $("fld-title").value = ""; $("fld-launch").value = "";
+    const firstMon = monBox.querySelector('input[name="mon"]'); if (firstMon) firstMon.checked = true;
+    const lh = preBox.querySelector('input[name="preset"][value="left_half"]'); if (lh) lh.checked = true;
+    $("fld-custom").classList.add("hidden");
+    $("cx").value = ""; $("cy").value = ""; $("cw").value = ""; $("ch").value = "";
   }
-  const v = ($("fld-presets").querySelector('input[name="preset"]:checked') || {}).value;
-  $("fld-custom").classList.toggle("hidden", v !== "custom");
-  showModal("modal-add", true);
+
+  showModal("modal-add");
 }
 
-async function saveAddDialog() {
-  const proc = $("fld-proc").value.trim().toLowerCase();
-  if (!proc) return;
-  let procNorm = proc.split(/[/\\]/).pop();
-  if (!procNorm.toLowerCase().endsWith(".exe")) procNorm = procNorm + ".exe";
-  const mon = ($("fld-monitors").querySelector('input[name="mon"]:checked') || {}).value || "0";
-  const preset = ($("fld-presets").querySelector('input[name="preset"]:checked') || {}).value || "custom";
-  const cfg = {
-    process_name: procNorm,
+function readAppFromModal() {
+  const proc = $("fld-proc").value.trim();
+  if (!proc) { toast("process name required"); return null; }
+  const monR = document.querySelector('input[name="mon"]:checked');
+  const preR = document.querySelector('input[name="preset"]:checked');
+  const monitor_index = monR ? parseInt(monR.value, 10) : 0;
+  const preset = preR ? preR.value : "custom";
+  const pos = {
+    x: parseInt($("cx").value) || 0,
+    y: parseInt($("cy").value) || 0,
+    width: parseInt($("cw").value) || 0,
+    height: parseInt($("ch").value) || 0,
+  };
+  return {
+    process_name: proc,
     window_title_match: $("fld-title").value.trim(),
     launch_path: $("fld-launch").value.trim(),
-    monitor_index: Number(mon),
-    preset: preset,
-    position: {
-      x: Number($("cx").value || 0),
-      y: Number($("cy").value || 0),
-      width: Number($("cw").value || 800),
-      height: Number($("ch").value || 600),
-    },
+    monitor_index,
+    preset,
+    position: pos,
   };
-  let res;
-  if (editAppIndex == null) {
-    res = await callApi("add_app_to_mode", selectedMode, cfg);
-  } else {
-    res = await callApi("update_app_in_mode", selectedMode, editAppIndex, cfg);
-  }
-  if (!res.ok) return;
-  showModal("modal-add", false);
-  await selectMode(selectedMode);
 }
 
-function openMonitorPicker(count) {
-  $("picker-hint").textContent =
-    "monitor count is now " + count + ". pick a mode to apply:";
-  const host = $("picker-modes");
-  host.innerHTML = "";
-  callApi("get_modes").then((data) => {
-    (data.modes || []).forEach((m) => {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.textContent = (m.name || "").toLowerCase();
-      b.addEventListener("click", async () => {
-        await callApi("apply_mode", m.name);
-        showModal("modal-picker", false);
-        if (selectedMode === m.name) await refreshStats();
-      });
-      host.appendChild(b);
-    });
-    showModal("modal-picker", true);
+// --- modal helpers ---------------------------------------------
+
+function showModal(id) {
+  $("backdrop").classList.remove("hidden");
+  $(id).classList.remove("hidden");
+}
+function hideModals() {
+  $("backdrop").classList.add("hidden");
+  document.querySelectorAll(".modal").forEach(m => m.classList.add("hidden"));
+}
+
+function promptInput(title, initial = "") {
+  return new Promise((resolve) => {
+    $("prompt-title").textContent = title;
+    const input = $("prompt-input");
+    input.value = initial;
+    showModal("modal-prompt");
+    setTimeout(() => input.focus(), 50);
+    const ok = () => { hideModals(); cleanup(); resolve(input.value.trim() || null); };
+    const cancel = () => { hideModals(); cleanup(); resolve(null); };
+    const key = (e) => { if (e.key === "Enter") ok(); if (e.key === "Escape") cancel(); };
+    const cleanup = () => {
+      $("prompt-ok").onclick = null;
+      $("prompt-cancel").onclick = null;
+      input.removeEventListener("keydown", key);
+    };
+    $("prompt-ok").onclick = ok;
+    $("prompt-cancel").onclick = cancel;
+    input.addEventListener("keydown", key);
   });
 }
 
-window.__onMonitorChanged = function (payload) {
-  openMonitorPicker(payload.count);
+// --- monitor-change picker (from Python) ------------------------
+
+window.__onMonitorChanged = (data) => {
+  const count = (data && data.count) || 0;
+  $("picker-hint").textContent = `detected ${count} monitor${count !== 1 ? "s" : ""}. pick a mode to apply:`;
+  const box = $("picker-modes");
+  box.innerHTML = "";
+  for (const m of state.modes) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.innerHTML = `<span class="dot" style="background:${modeColor(m.name)}"></span><span>${escapeHtml(m.name.toLowerCase())}</span>`;
+    b.onclick = async () => {
+      hideModals();
+      await api().apply_mode(m.name);
+      toast(`applying ${m.name.toLowerCase()}…`);
+    };
+    box.appendChild(b);
+  }
+  if (!state.modes.length) {
+    box.innerHTML = `<div style="color:var(--muted);font-size:11px;padding:8px 0;">no modes saved yet</div>`;
+  }
+  showModal("modal-picker");
+  // also refresh sidebar status
+  loadAll();
 };
 
-async function init() {
+// --- wire up UI -------------------------------------------------
+
+function wire() {
   $("btn-new-mode").onclick = async () => {
-    const name = prompt("new mode name:");
+    const name = await promptInput("» new mode");
     if (!name) return;
-    const r = await callApi("create_mode", name.trim());
-    if (!r.ok) {
-      alert(r.error || "could not create");
-      return;
-    }
-    await loadModeList();
-    await selectMode(name.trim());
+    const res = await api().create_mode(name);
+    if (!res.ok) { toast(res.error || "failed"); return; }
+    state.selected = name;
+    await loadAll();
   };
 
   $("btn-rename").onclick = async () => {
-    if (!selectedMode) return;
-    const nn = prompt("rename mode to:", selectedMode);
-    if (!nn || nn === selectedMode) return;
-    const r = await callApi("rename_mode", selectedMode, nn.trim());
-    if (!r.ok) {
-      alert(r.error || "rename failed");
-      return;
-    }
-    await loadModeList();
-    await selectMode(nn.trim());
+    const mode = currentMode(); if (!mode) return;
+    const name = await promptInput("» rename", mode.name);
+    if (!name || name === mode.name) return;
+    const res = await api().rename_mode(mode.name, name);
+    if (!res.ok) { toast(res.error || "failed"); return; }
+    state.selected = name;
+    await loadAll();
+  };
+
+  $("btn-delete").onclick = async () => {
+    const mode = currentMode(); if (!mode) return;
+    const ok = await promptInput(`» delete ${mode.name.toLowerCase()}? type YES`);
+    if (ok !== "YES") { toast("cancelled"); return; }
+    await api().delete_mode(mode.name);
+    state.selected = null;
+    await loadAll();
   };
 
   $("btn-capture").onclick = async () => {
-    if (!selectedMode) return;
-    const r = await callApi("capture_current_layout", selectedMode);
-    if (!r.ok) alert(r.error || "capture failed");
-    await selectMode(selectedMode);
+    const mode = currentMode(); if (!mode) return;
+    const res = await api().capture_current_layout(mode.name);
+    if (res.ok) toast(`captured ${res.count} apps`);
+    else toast(res.error || "capture failed");
+    await loadAll();
   };
 
   $("btn-apply").onclick = async () => {
-    if (!selectedMode) return;
-    await callApi("apply_mode", selectedMode);
-    await refreshStats();
+    const mode = currentMode(); if (!mode) return;
+    await api().apply_mode(mode.name);
+    toast(`applying ${mode.name.toLowerCase()}…`);
+    setTimeout(refreshStats, 1200);
   };
 
-  $("btn-add-app").onclick = () => openAddDialog(null);
+  $("btn-add-app").onclick = () => openAppModal(null);
+
+  $("modal-add-cancel").onclick = hideModals;
+  $("modal-add-save").onclick = async () => {
+    const cfg = readAppFromModal();
+    if (!cfg) return;
+    const mode = currentMode();
+    if (state.editIndex === null) {
+      await api().add_app_to_mode(mode.name, cfg);
+    } else {
+      await api().update_app_in_mode(mode.name, state.editIndex, cfg);
+    }
+    hideModals();
+    await loadAll();
+  };
+
   $("btn-refresh-wins").onclick = async () => {
-    await fillWindowSelect();
-    onWinSelectChange();
+    state.openWindows = await api().get_open_windows();
+    const sel = $("fld-win");
+    sel.innerHTML = `<option value="">— pick one —</option>`;
+    for (const w of state.openWindows) {
+      const opt = document.createElement("option");
+      opt.value = w.process_name + "|" + w.title;
+      opt.textContent = `${w.process_name}${w.title ? " · " + w.title.slice(0, 50) : ""}`;
+      sel.appendChild(opt);
+    }
+    toast(`${state.openWindows.length} windows`);
   };
-  $("modal-add-cancel").onclick = () => showModal("modal-add", false);
-  $("modal-add-save").onclick = saveAddDialog;
-  $("picker-dismiss").onclick = () => showModal("modal-picker", false);
 
-  await loadModeList();
-  const modes = (await callApi("get_modes")).modes || [];
-  if (modes.length && modes[0].name) await selectMode(modes[0].name);
-  else await refreshStats();
+  $("picker-dismiss").onclick = hideModals;
+  $("btn-quit").onclick = () => api().minimize_to_tray();
 
-  setInterval(() => {
-    refreshMonitorBadge().catch(() => {});
-  }, 4000);
-  await refreshMonitorBadge();
-  window.addEventListener("resize", () => {
-    if (selectedMode) renderPreview();
+  // close modals on backdrop click
+  $("backdrop").onclick = hideModals;
+
+  // escape closes any modal
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") hideModals();
   });
+
+  // periodic stats refresh (for relative time in stats line)
+  state.statsTimer = setInterval(refreshStats, 15000);
 }
 
-window.addEventListener("pywebviewready", () => {
-  init().catch((e) => console.error(e));
-});
+// --- boot ------------------------------------------------------
+
+(async function boot() {
+  await waitForApi();
+  wire();
+  await loadAll();
+})();
