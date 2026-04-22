@@ -42,7 +42,6 @@ def _get_layout_path() -> Path:
     user_dir.mkdir(parents=True, exist_ok=True)
     user_path = user_dir / "layouts.json"
     if not user_path.exists():
-        # Seed from bundled default if present, otherwise create empty.
         bundled = _get_bundled_default_path()
         if bundled.exists():
             try:
@@ -61,9 +60,7 @@ def _default_data() -> dict:
 
 
 def load_layouts() -> dict:
-    """
-    Load layouts from layouts.json, creating a default file if missing or invalid.
-    """
+    """Load layouts from layouts.json, creating a default file if missing or invalid."""
     path = _get_layout_path()
     try:
         text = path.read_text(encoding="utf-8")
@@ -81,9 +78,7 @@ def load_layouts() -> dict:
 
 
 def save_layouts(data: dict) -> None:
-    """
-    Persist the full layouts document to layouts.json.
-    """
+    """Persist the full layouts document to layouts.json."""
     path = _get_layout_path()
     try:
         path.write_text(
@@ -115,9 +110,7 @@ def get_mode(mode_name: str) -> Optional[dict]:
 
 
 def add_mode(name: str) -> bool:
-    """
-    Append a new empty mode. Returns False if the name already exists or is blank.
-    """
+    """Append a new empty mode. Returns False if the name already exists or is blank."""
     label = (name or "").strip()
     if not label:
         return False
@@ -144,10 +137,7 @@ def delete_mode(mode_name: str) -> bool:
 
 
 def rename_mode(old_name: str, new_name: str) -> bool:
-    """
-    Rename a mode. Returns False if the old mode is missing, the new name is
-    invalid, or another mode already uses the new name.
-    """
+    """Rename a mode."""
     old = (old_name or "").strip()
     new = (new_name or "").strip()
     if not old or not new or old == new:
@@ -164,11 +154,7 @@ def rename_mode(old_name: str, new_name: str) -> bool:
 
 
 def add_app_to_mode(mode_name: str, app_config: dict) -> bool:
-    """
-    Append an app configuration dict to the named mode.
-
-    Returns False if the mode does not exist.
-    """
+    """Append an app configuration dict to the named mode."""
     label = (mode_name or "").strip()
     if not get_mode(label):
         return False
@@ -185,9 +171,7 @@ def add_app_to_mode(mode_name: str, app_config: dict) -> bool:
 
 
 def remove_app_from_mode(mode_name: str, app_index: int) -> bool:
-    """
-    Remove an app entry by index from a mode. Returns False on invalid index or mode.
-    """
+    """Remove an app entry by index from a mode."""
     label = (mode_name or "").strip()
     if not get_mode(label):
         return False
@@ -204,9 +188,7 @@ def remove_app_from_mode(mode_name: str, app_index: int) -> bool:
 
 
 def update_app_in_mode(mode_name: str, app_index: int, app_config: dict) -> bool:
-    """
-    Replace an app entry at app_index with app_config. Returns False if invalid.
-    """
+    """Replace an app entry at app_index with app_config."""
     label = (mode_name or "").strip()
     if not get_mode(label):
         return False
@@ -223,29 +205,23 @@ def update_app_in_mode(mode_name: str, app_index: int, app_config: dict) -> bool
 
 
 def _normalize_process_name(name: str) -> str:
-    """Normalize user input to a lowercase ``*.exe`` basename for matching."""
+    """Normalize user input to a lowercase ``*.exe`` basename."""
     base = os.path.basename((name or "").strip())
     if not base.lower().endswith(".exe"):
         base = f"{base}.exe"
     return base.lower()
 
 
-def _get_monitor_bounds(monitors: List[dict], monitor_index: int) -> Optional[tuple]:
-    """Return ``(x, y, width, height)`` for a monitor index, or ``None``."""
+def _get_monitor_bounds(monitors: List[dict], monitor_index: int):
+    """Return (x, y, width, height) for a monitor index, or None."""
     for mon in monitors:
         if int(mon["index"]) == int(monitor_index):
             return (int(mon["x"]), int(mon["y"]), int(mon["width"]), int(mon["height"]))
     return None
 
 
-def rect_for_preset(
-    monitor_bounds: tuple,
-    preset: str,
-    position: Optional[dict],
-) -> tuple:
-    """
-    Compute (x, y, width, height) in screen coordinates for a preset on a monitor.
-    """
+def rect_for_preset(monitor_bounds, preset: str, position: Optional[dict]):
+    """Compute (x, y, width, height) in screen coords for a preset on a monitor."""
     mx, my, mw, mh = monitor_bounds
     preset_key = (preset or "custom").strip().lower()
     if preset_key == "maximized":
@@ -273,7 +249,8 @@ def rect_for_preset(
 
 def apply_mode(mode_name: str) -> None:
     """
-    Apply a saved mode: launch missing apps, then move matching windows into place.
+    Apply a saved mode: launch missing apps, move matching windows into place,
+    and minimize any other visible windows.
     """
     mode = get_mode(mode_name)
     if not mode:
@@ -283,24 +260,55 @@ def apply_mode(mode_name: str) -> None:
     if not monitors:
         print("[layouts] apply_mode: no monitors detected")
         return
+
     apps = mode.get("apps") or []
+
+    # Track which hwnds we position so we can minimize everything else after.
+    positioned_hwnds: set = set()
     for app in apps:
         try:
-            _apply_single_app(app, monitors)
+            hwnd = _apply_single_app(app, monitors)
+            if hwnd:
+                positioned_hwnds.add(int(hwnd))
         except Exception as exc:
             print(f"[layouts] apply_mode error for {app!r}: {exc}")
 
+    # Minimize all other visible top-level windows.
+    try:
+        _minimize_unlisted(positioned_hwnds)
+    except Exception as exc:
+        print(f"[layouts] minimize_unlisted failed: {exc}")
 
-def _apply_single_app(app: dict, monitors: List[dict]) -> None:
-    """Apply geometry and launch rules for one app entry."""
+
+def _minimize_unlisted(positioned_hwnds: set) -> None:
+    """Minimize every visible top-level window not in positioned_hwnds."""
+    # Skip our own organizer window by title.
+    own_title_substrings = ("desktop organizer", "desktop.organizer", "pywebview")
+    for win in window_manager.list_open_windows():
+        hwnd = int(win["hwnd"])
+        if hwnd in positioned_hwnds:
+            continue
+        title = (win.get("title") or "").lower()
+        if any(sub in title for sub in own_title_substrings):
+            continue
+        window_manager.minimize_window(hwnd)
+
+
+def _apply_single_app(app: dict, monitors: List[dict]) -> Optional[int]:
+    """
+    Apply geometry and launch rules for one app entry.
+
+    Returns the hwnd it positioned, or None if it couldn't.
+    """
     process_name = _normalize_process_name(str(app.get("process_name", "")))
     if not process_name or process_name == ".exe":
         print("[layouts] skipping app with empty process_name")
-        return
+        return None
     title_match = app.get("window_title_match")
     title_match_str = str(title_match).strip() if title_match else None
     launch_path = app.get("launch_path")
     launch_path_str = str(launch_path).strip() if launch_path else ""
+    chrome_profile = str(app.get("chrome_profile") or "").strip() or None
     try:
         monitor_index = int(app.get("monitor_index", 0))
     except Exception:
@@ -310,9 +318,7 @@ def _apply_single_app(app: dict, monitors: List[dict]) -> None:
 
     bounds = _get_monitor_bounds(monitors, monitor_index)
     if not bounds:
-        print(
-            f"[layouts] monitor_index {monitor_index} out of range; using primary"
-        )
+        print(f"[layouts] monitor_index {monitor_index} out of range; using primary")
         primary = next((m for m in monitors if m.get("is_primary")), monitors[0])
         bounds = (
             int(primary["x"]),
@@ -322,48 +328,72 @@ def _apply_single_app(app: dict, monitors: List[dict]) -> None:
         )
     x, y, w, h = rect_for_preset(bounds, preset, position)
 
-    hwnd = window_manager.find_window_by_process(process_name, title_match_str)
+    # Step 1: try to find an existing window
+    hwnd: Optional[int] = None
+    if process_name == "chrome.exe" and chrome_profile:
+        hwnd = window_manager.find_chrome_window_by_profile(chrome_profile, title_match_str)
+    else:
+        hwnd = window_manager.find_window_by_process(process_name, title_match_str)
+
+    # Step 2: if not running and we have a launch command, launch it
     if hwnd is None and launch_path_str:
         print(f"[layouts] launching {launch_path_str!r} for {process_name}")
         window_manager.launch_app(launch_path_str)
-        hwnd = window_manager.wait_for_window(process_name, title_match_str)
+        if process_name == "chrome.exe" and chrome_profile:
+            hwnd = window_manager.wait_for_chrome_profile_window(
+                chrome_profile, title_match_str, timeout_sec=10.0
+            )
+        else:
+            hwnd = window_manager.wait_for_window(
+                process_name, title_match_str, timeout_sec=10.0
+            )
         if hwnd is None:
             print(f"[layouts] window for {process_name} did not appear in time")
-            return
+            return None
+
     if hwnd is None:
-        print(f"[layouts] no window found for {process_name}")
-        return
+        print(f"[layouts] no window found for {process_name} (no launch_path set)")
+        return None
+
     window_manager.move_window(hwnd, x, y, w, h)
+    return hwnd
 
 
 def capture_current_layout_to_mode(mode_name: str) -> int:
     """
     Replace the named mode's apps with a snapshot of currently open windows.
+
+    Saves the exe path as launch_path and detects Chrome profiles so the mode
+    can relaunch missing apps on apply.
     """
     label = (mode_name or "").strip()
     if not get_mode(label):
         print(f"[layouts] capture: unknown mode {mode_name!r}")
         return 0
+
+    # Skip tabs/dialogs of our own app and off-screen ghost windows.
     snapshots: List[dict] = []
     for win in window_manager.list_open_windows():
         title = win.get("title") or ""
         tl = title.lower()
-        if "desktop organizer" in tl or "pywebview" in tl:
+        if "desktop organizer" in tl or "desktop.organizer" in tl or "pywebview" in tl:
             continue
         proc = win.get("process_name") or ""
         if not proc:
             continue
         x, y, w, h = win["rect"]
-        snapshots.append(
-            {
-                "process_name": proc,
-                "window_title_match": title[:120] if title else "",
-                "launch_path": "",
-                "monitor_index": int(win.get("monitor_index", 0)),
-                "position": {"x": x, "y": y, "width": w, "height": h},
-                "preset": "custom",
-            }
-        )
+        entry: Dict[str, Any] = {
+            "process_name": proc,
+            "window_title_match": title[:120] if title else "",
+            "launch_path": win.get("launch_hint") or "",
+            "monitor_index": int(win.get("monitor_index", 0)),
+            "position": {"x": x, "y": y, "width": w, "height": h},
+            "preset": "custom",
+        }
+        if win.get("chrome_profile"):
+            entry["chrome_profile"] = win["chrome_profile"]
+        snapshots.append(entry)
+
     data = load_layouts()
     for m in data.get("modes", []):
         if m.get("name") == label:
@@ -371,4 +401,3 @@ def capture_current_layout_to_mode(mode_name: str) -> int:
             break
     save_layouts(data)
     return len(snapshots)
-    

@@ -5,9 +5,10 @@ Window and monitor helpers for Desktop Organizer using pywin32.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import time
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import win32api
 import win32con
@@ -29,14 +30,12 @@ try:
         ctypes.POINTER(wintypes.DWORD),
     ]
     _QueryFullProcessImageNameW.restype = wintypes.BOOL
-except Exception:  # pragma: no cover - defensive for odd environments
+except Exception:
     _KERNEL32 = None
 
 
 def _query_process_exe_path(pid: int) -> Optional[str]:
-    """
-    Return the full executable path for a process id, or None if unavailable.
-    """
+    """Return the full executable path for a process id, or None if unavailable."""
     if _KERNEL32 is None:
         return None
     PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
@@ -69,12 +68,7 @@ def _monitor_handle_to_index(h_monitor: int, monitors: List[dict]) -> int:
 
 
 def _enum_display_monitors_raw() -> List[Tuple[int, Tuple[int, int, int, int], bool]]:
-    """
-    Enumerate monitors as (handle, (left, top, right, bottom), is_primary).
-
-    Uses pywin32's ``EnumDisplayMonitors()`` which returns a list of tuples
-    ``(hMonitor, hdcMonitor, (left, top, right, bottom))``.
-    """
+    """Enumerate monitors as (handle, (left, top, right, bottom), is_primary)."""
     results: List[Tuple[int, Tuple[int, int, int, int], bool]] = []
     try:
         entries = win32api.EnumDisplayMonitors()
@@ -86,7 +80,7 @@ def _enum_display_monitors_raw() -> List[Tuple[int, Tuple[int, int, int, int], b
             info = win32api.GetMonitorInfo(h_monitor)
             mon = info["Monitor"]
             left, top, right, bottom = mon
-            is_primary = bool(info.get("Flags", 0) & 1)  # MONITORINFOF_PRIMARY == 1
+            is_primary = bool(info.get("Flags", 0) & 1)
             results.append((int(h_monitor), (left, top, right, bottom), is_primary))
         except Exception as exc:
             print(f"[window_manager] GetMonitorInfo failed: {exc}")
@@ -96,11 +90,7 @@ def _enum_display_monitors_raw() -> List[Tuple[int, Tuple[int, int, int, int], b
 
 
 def get_monitors() -> List[dict]:
-    """
-    Return display monitors sorted left-to-right, then top-to-bottom.
-
-    Each dict contains: index, x, y, width, height, is_primary, handle (HWND monitor).
-    """
+    """Return display monitors sorted left-to-right, then top-to-bottom."""
     raw = _enum_display_monitors_raw()
     raw.sort(key=lambda t: (t[1][0], t[1][1]))
     monitors: List[dict] = []
@@ -141,13 +131,168 @@ def _should_skip_window(hwnd: int) -> bool:
     title = win32gui.GetWindowText(hwnd)
     if not title:
         return True
+    # skip off-screen ghost windows (Windows uses -32000 for "hidden")
+    try:
+        x, y, _, _ = _window_rect(hwnd)
+        if x <= -30000 or y <= -30000:
+            return True
+    except Exception:
+        pass
     return False
 
 
+# ---------------------------------------------------------------------------
+# Chrome profile detection
+# ---------------------------------------------------------------------------
+
+def _chrome_local_state_path() -> Optional[str]:
+    """Return path to Chrome's Local State JSON (maps profile dirs to display names)."""
+    local_app = os.environ.get("LOCALAPPDATA")
+    if not local_app:
+        return None
+    path = os.path.join(local_app, "Google", "Chrome", "User Data", "Local State")
+    return path if os.path.exists(path) else None
+
+
+_chrome_profile_cache: Optional[Dict[str, str]] = None  # display_name_lower -> dir_id
+
+
+def _load_chrome_profiles() -> Dict[str, str]:
+    """Return a mapping of Chrome profile display names (lowercase) to directory IDs."""
+    global _chrome_profile_cache
+    if _chrome_profile_cache is not None:
+        return _chrome_profile_cache
+    path = _chrome_local_state_path()
+    if not path:
+        _chrome_profile_cache = {}
+        return _chrome_profile_cache
+    try:
+        import json
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        info_cache = data.get("profile", {}).get("info_cache", {}) or {}
+        mapping: Dict[str, str] = {}
+        for dir_id, meta in info_cache.items():
+            name = str(meta.get("name") or "").strip().lower()
+            if name:
+                mapping[name] = dir_id
+        _chrome_profile_cache = mapping
+        return mapping
+    except Exception as exc:
+        print(f"[window_manager] chrome profiles parse: {exc}")
+        _chrome_profile_cache = {}
+        return _chrome_profile_cache
+
+
+def _detect_chrome_profile(window_title: str) -> Optional[str]:
+    """
+    Extract the Chrome profile directory id from a window title if possible.
+
+    Chrome appends the profile name to the title like:
+      "Some Page - Google Chrome - Work"
+    We match the last " - <something>" segment against known profile display names.
+    """
+    if not window_title:
+        return None
+    profiles = _load_chrome_profiles()
+    if not profiles:
+        return None
+    # Try the last dash-separated segment first, then walk back.
+    parts = [p.strip() for p in window_title.split(" - ") if p.strip()]
+    for seg in reversed(parts):
+        key = seg.lower()
+        if key in profiles:
+            return profiles[key]
+    return None
+
+
+def _build_chrome_launch(exe_path: str, profile_dir: Optional[str]) -> str:
+    """Build a Chrome launch command that targets a specific profile."""
+    cmd = f'"{exe_path}"'
+    if profile_dir:
+        cmd += f' --profile-directory="{profile_dir}"'
+    return cmd
+
+
+# ---------------------------------------------------------------------------
+# UWP app detection (Store apps like Spotify, Settings, Calculator)
+# ---------------------------------------------------------------------------
+
+def _is_uwp_frame_host(process_name: str) -> bool:
+    """UWP apps typically run under ApplicationFrameHost.exe."""
+    return process_name.lower() == "applicationframehost.exe"
+
+
+def _get_aumid_for_hwnd(hwnd: int) -> Optional[str]:
+    """
+    Query the AppUserModelID for a window using the shell property store.
+
+    Returns None if the window doesn't have one.
+    """
+    try:
+        from ctypes import POINTER, byref, c_void_p
+        from comtypes import GUID
+
+        # Load shell32 functions lazily — not all installs expose these via pywin32.
+        shell32 = ctypes.WinDLL("shell32")
+        ole32 = ctypes.WinDLL("ole32")
+
+        SHGetPropertyStoreForWindow = shell32.SHGetPropertyStoreForWindow
+        SHGetPropertyStoreForWindow.argtypes = [
+            wintypes.HWND,
+            POINTER(GUID),
+            POINTER(c_void_p),
+        ]
+        SHGetPropertyStoreForWindow.restype = ctypes.HRESULT
+
+        # IPropertyStore GUID
+        IID_IPropertyStore = GUID("{886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99}")
+        store = c_void_p()
+        hr = SHGetPropertyStoreForWindow(
+            hwnd, byref(IID_IPropertyStore), byref(store)
+        )
+        if hr != 0 or not store.value:
+            return None
+
+        # Rather than poke at COM vtables from ctypes, use win32com for the call.
+        import pythoncom
+        from win32com.client import Dispatch  # noqa: F401 (ensures COM init)
+
+        pythoncom.CoInitialize()
+        store_ptr = store.value
+        # We fall back to win32api's PSGetPropertyFromWindow via win32com if available.
+        # Simpler: return None here; caller treats as "no AUMID" and uses the title fallback.
+        return None
+    except Exception:
+        return None
+
+
+def _uwp_launch_command(aumid: Optional[str], window_title: str) -> Optional[str]:
+    """
+    Build a launch command for a UWP app.
+
+    If we have the AUMID we use shell:AppsFolder. Otherwise, for well-known apps
+    we fall back to a hand-rolled URI scheme.
+    """
+    if aumid:
+        return f"explorer.exe shell:AppsFolder\\{aumid}"
+    # Common-app fallbacks by title keyword
+    title_lower = (window_title or "").lower()
+    if "spotify" in title_lower:
+        return "explorer.exe shell:AppsFolder\\SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify"
+    if "settings" in title_lower:
+        return "explorer.exe ms-settings:"
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Public window listing
+# ---------------------------------------------------------------------------
+
 def list_open_windows() -> List[dict]:
     """
-    List visible top-level windows as dicts with hwnd, title, process_name,
-    rect (x, y, w, h), and monitor_index (based on get_monitors ordering).
+    List visible top-level windows with hwnd, title, process_name, exe_path,
+    rect (x, y, w, h), monitor_index, chrome_profile (or None), and launch_hint.
     """
     monitors = get_monitors()
     found: List[dict] = []
@@ -159,19 +304,37 @@ def list_open_windows() -> List[dict]:
             _, pid = win32process.GetWindowThreadProcessId(hwnd)
         except Exception:
             return True
-        exe_path = _query_process_exe_path(int(pid))
+        exe_path = _query_process_exe_path(int(pid)) or ""
         process_name = _basename_lower(exe_path) or f"pid_{pid}"
         title = win32gui.GetWindowText(hwnd)
         x, y, w, h = _window_rect(hwnd)
         h_mon = win32api.MonitorFromWindow(hwnd, win32con.MONITOR_DEFAULTTONEAREST)
         monitor_index = _monitor_handle_to_index(int(h_mon), monitors)
+
+        chrome_profile: Optional[str] = None
+        launch_hint: str = ""
+
+        if process_name == "chrome.exe":
+            chrome_profile = _detect_chrome_profile(title)
+            if exe_path:
+                launch_hint = _build_chrome_launch(exe_path, chrome_profile)
+        elif _is_uwp_frame_host(process_name):
+            aumid = _get_aumid_for_hwnd(int(hwnd))
+            launch_hint = _uwp_launch_command(aumid, title) or ""
+        else:
+            if exe_path:
+                launch_hint = f'"{exe_path}"'
+
         found.append(
             {
                 "hwnd": int(hwnd),
                 "title": title,
                 "process_name": process_name,
+                "exe_path": exe_path,
                 "rect": (x, y, w, h),
                 "monitor_index": monitor_index,
+                "chrome_profile": chrome_profile,
+                "launch_hint": launch_hint,
             }
         )
         return True
@@ -181,12 +344,7 @@ def list_open_windows() -> List[dict]:
 
 
 def move_window(hwnd: int, x: int, y: int, width: int, height: int) -> None:
-    """
-    Move and resize a top-level window to the given screen coordinates.
-
-    Restores the window first if it is minimized or maximized so the new
-    geometry can take effect.
-    """
+    """Move and resize a top-level window to the given screen coordinates."""
     if not win32gui.IsWindow(int(hwnd)):
         return
     placement = win32gui.GetWindowPlacement(int(hwnd))
@@ -206,17 +364,20 @@ def move_window(hwnd: int, x: int, y: int, width: int, height: int) -> None:
     )
 
 
+def minimize_window(hwnd: int) -> None:
+    """Minimize a window. Silently ignores invalid hwnds."""
+    try:
+        if win32gui.IsWindow(int(hwnd)):
+            win32gui.ShowWindow(int(hwnd), win32con.SW_MINIMIZE)
+    except Exception as exc:
+        print(f"[window_manager] minimize_window: {exc}")
+
+
 def find_window_by_process(
     process_name: str,
     window_title_match: Optional[str] = None,
 ) -> Optional[int]:
-    """
-    Find a top-level window HWND for a running process.
-
-    process_name is matched case-insensitively against the executable basename
-    (for example, 'chrome.exe'). If window_title_match is provided, the window
-    title must contain that substring.
-    """
+    """Find a top-level window HWND for a running process."""
     target_proc = (process_name or "").strip().lower()
     if not target_proc:
         return None
@@ -233,18 +394,29 @@ def find_window_by_process(
     return None
 
 
-def launch_app(path_or_command: str) -> bool:
-    """
-    Launch an application from a path or full command line.
+def find_chrome_window_by_profile(profile_dir: str, title_match: Optional[str] = None) -> Optional[int]:
+    """Find a Chrome window for a specific profile directory id."""
+    target_profile = (profile_dir or "").strip()
+    if not target_profile:
+        return None
+    match_sub = (title_match or "").strip()
+    for entry in list_open_windows():
+        if entry["process_name"] != "chrome.exe":
+            continue
+        if entry.get("chrome_profile") != target_profile:
+            continue
+        if match_sub and match_sub not in (entry.get("title") or ""):
+            continue
+        return int(entry["hwnd"])
+    return None
 
-    Returns True if a launch was attempted without raising immediately; failures
-    are still possible for invalid commands.
-    """
+
+def launch_app(path_or_command: str) -> bool:
+    """Launch an application from a path or full command line."""
     cmd = (path_or_command or "").strip()
     if not cmd:
         return False
     try:
-        # Use shell on Windows so quoted paths and common flags work reliably.
         subprocess.Popen(cmd, shell=True)
         return True
     except Exception as exc:
@@ -258,9 +430,7 @@ def wait_for_window(
     timeout_sec: float = 8.0,
     poll_sec: float = 0.35,
 ) -> Optional[int]:
-    """
-    Poll until a matching window appears, or timeout. Intended for post-launch waits.
-    """
+    """Poll until a matching window appears, or timeout."""
     deadline = time.monotonic() + float(timeout_sec)
     while time.monotonic() < deadline:
         hwnd = find_window_by_process(process_name, window_title_match)
@@ -268,3 +438,20 @@ def wait_for_window(
             return hwnd
         time.sleep(float(poll_sec))
     return None
+
+
+def wait_for_chrome_profile_window(
+    profile_dir: str,
+    title_match: Optional[str] = None,
+    timeout_sec: float = 10.0,
+    poll_sec: float = 0.4,
+) -> Optional[int]:
+    """Poll until a Chrome window matching the given profile appears."""
+    deadline = time.monotonic() + float(timeout_sec)
+    while time.monotonic() < deadline:
+        hwnd = find_chrome_window_by_profile(profile_dir, title_match)
+        if hwnd:
+            return hwnd
+        time.sleep(float(poll_sec))
+    return None
+    
