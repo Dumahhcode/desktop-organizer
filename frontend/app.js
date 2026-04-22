@@ -16,10 +16,12 @@ const PRESETS = ["left_half", "right_half", "top_half", "bottom_half", "maximize
 
 const state = {
   modes: [],
+  quickLaunch: [],
   selected: null,
   monitors: [],
   openWindows: [],
   editIndex: null,
+  qlEditIndex: null,
   statsTimer: null,
 };
 
@@ -72,12 +74,14 @@ function shortProcName(p) {
 // --- data loading ----------------------------------------------
 
 async function loadAll() {
-  const [modesDoc, monitors] = await Promise.all([
+  const [modesDoc, monitors, quickLaunch] = await Promise.all([
     api().get_modes(),
     api().get_monitors(),
+    api().get_quick_launch(),
   ]);
   state.modes = (modesDoc && modesDoc.modes) || [];
   state.monitors = monitors || [];
+  state.quickLaunch = quickLaunch || [];
   renderSidebar();
   updateMonitorStatus();
   if (state.selected && !state.modes.find(m => m.name === state.selected)) {
@@ -112,22 +116,86 @@ function renderSidebar() {
     empty.style.cssText = "color: var(--muted-3); font-size: 11px; padding: 16px 4px; text-align: center;";
     empty.textContent = "no modes yet";
     list.appendChild(empty);
+  } else {
+    for (const mode of state.modes) {
+      const btn = document.createElement("button");
+      btn.className = "mode-item" + (mode.name === state.selected ? " active" : "");
+      btn.type = "button";
+      const count = (mode.apps || []).length;
+      const color = modeColor(mode.name);
+      btn.innerHTML = `
+        <span class="dot" style="background:${color}"></span>
+        <span>${escapeHtml(mode.name.toLowerCase())}</span>
+        <span class="count">${count}</span>
+      `;
+      btn.onclick = () => { state.selected = mode.name; renderSidebar(); renderDetail(); };
+      list.appendChild(btn);
+    }
+  }
+  renderQuickLaunch();
+}
+
+function renderQuickLaunch() {
+  const list = $("quick-launch-list");
+  list.innerHTML = "";
+  if (!state.quickLaunch.length) {
+    const empty = document.createElement("div");
+    empty.style.cssText = "color: var(--muted-3); font-size: 10px; padding: 8px 4px;";
+    empty.textContent = "no quick apps";
+    list.appendChild(empty);
     return;
   }
-  for (const mode of state.modes) {
+  state.quickLaunch.forEach((item, idx) => {
     const btn = document.createElement("button");
-    btn.className = "mode-item" + (mode.name === state.selected ? " active" : "");
+    btn.className = "quick-launch-item";
     btn.type = "button";
-    const count = (mode.apps || []).length;
-    const color = modeColor(mode.name);
+    const color = modeColor(item.name || item.process_name || String(idx));
+    const display = (item.name || shortProcName(item.process_name || "app")).toLowerCase();
     btn.innerHTML = `
       <span class="dot" style="background:${color}"></span>
-      <span>${escapeHtml(mode.name.toLowerCase())}</span>
-      <span class="count">${count}</span>
+      <span class="name">${escapeHtml(display)}</span>
+      <span class="menu" data-idx="${idx}">···</span>
     `;
-    btn.onclick = () => { state.selected = mode.name; renderSidebar(); renderDetail(); };
+    btn.onclick = async (e) => {
+      if (e.target && e.target.classList && e.target.classList.contains("menu")) return;
+      const res = await api().launch_or_focus(idx);
+      if (res && res.ok) {
+        toast(res.action === "focused" ? `focusing ${display}` : `launching ${display}…`);
+      } else {
+        toast((res && res.error) || "quick launch failed");
+      }
+    };
+    const menuBtn = btn.querySelector(".menu");
+    menuBtn.onclick = (e) => {
+      e.stopPropagation();
+      openQuickLaunchMenu(menuBtn, idx);
+    };
     list.appendChild(btn);
-  }
+  });
+}
+
+function openQuickLaunchMenu(anchor, idx) {
+  document.querySelectorAll(".menu-dd").forEach(n => n.remove());
+  const dd = document.createElement("div");
+  dd.className = "menu-dd";
+  dd.innerHTML = `
+    <button type="button" data-act="edit">edit</button>
+    <button type="button" class="danger" data-act="delete">delete</button>
+  `;
+  anchor.appendChild(dd);
+  const closeOn = (ev) => { if (!dd.contains(ev.target)) { dd.remove(); document.removeEventListener("click", closeOn); } };
+  setTimeout(() => document.addEventListener("click", closeOn), 0);
+  dd.querySelectorAll("button").forEach(b => {
+    b.onclick = async () => {
+      const act = b.dataset.act;
+      dd.remove();
+      if (act === "edit") openQuickLaunchModal(idx);
+      if (act === "delete") {
+        await api().remove_quick_launch(idx);
+        await loadAll();
+      }
+    };
+  });
 }
 
 // --- detail pane ------------------------------------------------
@@ -397,6 +465,67 @@ function readAppFromModal() {
   };
 }
 
+// --- quick launch modal ----------------------------------------
+
+async function openQuickLaunchModal(editIdx = null) {
+  state.qlEditIndex = editIdx;
+  state.openWindows = await api().get_open_windows();
+  $("modal-ql-title").textContent = editIdx === null ? "» add quick launch app" : "» edit quick launch app";
+
+  const sel = $("ql-fld-win");
+  sel.innerHTML = `<option value="">— pick one —</option>`;
+  for (let i = 0; i < state.openWindows.length; i++) {
+    const w = state.openWindows[i];
+    const opt = document.createElement("option");
+    opt.value = String(i);
+    opt.textContent = `${w.process_name}${w.title ? " · " + w.title.slice(0, 50) : ""}`;
+    sel.appendChild(opt);
+  }
+  sel.onchange = () => {
+    const idx = parseInt(sel.value, 10);
+    if (Number.isNaN(idx) || !state.openWindows[idx]) return;
+    const w = state.openWindows[idx];
+    const pname = shortProcName(w.process_name || "");
+    const guessedName = (w.title || "").split(" - ")[0].trim() || pname.replace(".exe", "");
+    $("ql-fld-name").value = guessedName || pname;
+    $("ql-fld-launch").value = w.launch_hint || "";
+    $("ql-fld-proc").value = pname;
+    $("ql-fld-title").value = w.title || "";
+  };
+
+  if (editIdx === null) {
+    $("ql-fld-name").value = "";
+    $("ql-fld-launch").value = "";
+    $("ql-fld-proc").value = "";
+    $("ql-fld-title").value = "";
+  } else {
+    const item = state.quickLaunch[editIdx] || {};
+    $("ql-fld-name").value = item.name || "";
+    $("ql-fld-launch").value = item.launch_path || "";
+    $("ql-fld-proc").value = item.process_name || "";
+    $("ql-fld-title").value = item.window_title_match || "";
+  }
+  showModal("modal-quick-launch");
+}
+
+function readQuickLaunchFromModal() {
+  const process_name = $("ql-fld-proc").value.trim();
+  const launch_path = $("ql-fld-launch").value.trim();
+  const nameRaw = $("ql-fld-name").value.trim();
+  if (!process_name) {
+    toast("process name required");
+    return null;
+  }
+  const name = nameRaw || shortProcName(process_name).replace(".exe", "");
+  return {
+    name,
+    launch_path,
+    process_name,
+    window_title_match: $("ql-fld-title").value.trim(),
+    chrome_profile: null,
+  };
+}
+
 // --- modal helpers ---------------------------------------------
 
 function showModal(id) {
@@ -502,6 +631,7 @@ function wire() {
   };
 
   $("btn-add-app").onclick = () => openAppModal(null);
+  $("btn-ql-add").onclick = () => openQuickLaunchModal(null);
 
   $("modal-add-cancel").onclick = hideModals;
   $("modal-add-save").onclick = async () => {
@@ -528,6 +658,33 @@ function wire() {
       sel.appendChild(opt);
     }
     toast(`${state.openWindows.length} windows`);
+  };
+  $("btn-ql-refresh-wins").onclick = async () => {
+    state.openWindows = await api().get_open_windows();
+    const sel = $("ql-fld-win");
+    sel.innerHTML = `<option value="">— pick one —</option>`;
+    for (let i = 0; i < state.openWindows.length; i++) {
+      const w = state.openWindows[i];
+      const opt = document.createElement("option");
+      opt.value = String(i);
+      opt.textContent = `${w.process_name}${w.title ? " · " + w.title.slice(0, 50) : ""}`;
+      sel.appendChild(opt);
+    }
+    toast(`${state.openWindows.length} windows`);
+  };
+  $("modal-ql-cancel").onclick = hideModals;
+  $("modal-ql-save").onclick = async () => {
+    const cfg = readQuickLaunchFromModal();
+    if (!cfg) return;
+    let res;
+    if (state.qlEditIndex === null) res = await api().add_quick_launch(cfg);
+    else res = await api().update_quick_launch(state.qlEditIndex, cfg);
+    if (!res || !res.ok) {
+      toast((res && res.error) || "save failed");
+      return;
+    }
+    hideModals();
+    await loadAll();
   };
 
   $("picker-dismiss").onclick = hideModals;

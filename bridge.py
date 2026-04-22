@@ -46,6 +46,8 @@ def _serializable_windows() -> List[dict]:
                 "process_name": str(w.get("process_name") or ""),
                 "rect": list(w.get("rect") or (0, 0, 0, 0)),
                 "monitor_index": int(w.get("monitor_index", 0)),
+                "launch_hint": str(w.get("launch_hint") or ""),
+                "chrome_profile": w.get("chrome_profile"),
             }
         )
     return rows
@@ -186,6 +188,39 @@ class Bridge:
             "apps": app_count,
             "monitors": len(_serializable_monitors()),
         }
+
+    def get_quick_launch(self) -> List[dict]:
+        """Return quick launch entries."""
+        return layouts.get_quick_launch()
+
+    def add_quick_launch(self, app_config: dict) -> dict:
+        """Add a quick launch entry."""
+        cfg = app_config if isinstance(app_config, dict) else {}
+        ok = layouts.add_quick_launch(cfg)
+        return {"ok": bool(ok)}
+
+    def remove_quick_launch(self, index: int) -> dict:
+        """Remove quick launch entry by index."""
+        try:
+            idx = int(index)
+        except Exception:
+            return {"ok": False, "error": "bad index"}
+        ok = layouts.remove_quick_launch(idx)
+        return {"ok": bool(ok)}
+
+    def update_quick_launch(self, index: int, app_config: dict) -> dict:
+        """Update quick launch entry by index."""
+        try:
+            idx = int(index)
+        except Exception:
+            return {"ok": False, "error": "bad index"}
+        cfg = app_config if isinstance(app_config, dict) else {}
+        ok = layouts.update_quick_launch(idx, cfg)
+        return {"ok": bool(ok)}
+
+    def launch_or_focus(self, index: int) -> dict:
+        """Launch or focus a quick launch entry."""
+        return layouts.launch_or_focus(index)
 
     def minimize_to_tray(self) -> dict:
         """Hide the webview window (same as closing to tray)."""

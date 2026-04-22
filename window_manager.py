@@ -5,7 +5,6 @@ Window and monitor helpers for Desktop Organizer using pywin32.
 from __future__ import annotations
 
 import os
-import re
 import subprocess
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -197,12 +196,17 @@ def _detect_chrome_profile(window_title: str) -> Optional[str]:
     profiles = _load_chrome_profiles()
     if not profiles:
         return None
-    # Try the last dash-separated segment first, then walk back.
+    # Match only the trailing title segment: "... - <ProfileName>"
     parts = [p.strip() for p in window_title.split(" - ") if p.strip()]
-    for seg in reversed(parts):
-        key = seg.lower()
-        if key in profiles:
-            return profiles[key]
+    if not parts:
+        return None
+    key = parts[-1].lower()
+    if key in profiles:
+        return profiles[key]
+    # Some locales/titles can include extra whitespace variants.
+    key = " ".join(key.split())
+    if key in profiles:
+        return profiles[key]
     return None
 
 
@@ -229,42 +233,10 @@ def _get_aumid_for_hwnd(hwnd: int) -> Optional[str]:
 
     Returns None if the window doesn't have one.
     """
-    try:
-        from ctypes import POINTER, byref, c_void_p
-        from comtypes import GUID
-
-        # Load shell32 functions lazily — not all installs expose these via pywin32.
-        shell32 = ctypes.WinDLL("shell32")
-        ole32 = ctypes.WinDLL("ole32")
-
-        SHGetPropertyStoreForWindow = shell32.SHGetPropertyStoreForWindow
-        SHGetPropertyStoreForWindow.argtypes = [
-            wintypes.HWND,
-            POINTER(GUID),
-            POINTER(c_void_p),
-        ]
-        SHGetPropertyStoreForWindow.restype = ctypes.HRESULT
-
-        # IPropertyStore GUID
-        IID_IPropertyStore = GUID("{886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99}")
-        store = c_void_p()
-        hr = SHGetPropertyStoreForWindow(
-            hwnd, byref(IID_IPropertyStore), byref(store)
-        )
-        if hr != 0 or not store.value:
-            return None
-
-        # Rather than poke at COM vtables from ctypes, use win32com for the call.
-        import pythoncom
-        from win32com.client import Dispatch  # noqa: F401 (ensures COM init)
-
-        pythoncom.CoInitialize()
-        store_ptr = store.value
-        # We fall back to win32api's PSGetPropertyFromWindow via win32com if available.
-        # Simpler: return None here; caller treats as "no AUMID" and uses the title fallback.
-        return None
-    except Exception:
-        return None
+    # Kept intentionally conservative to avoid extra non-pywin32 dependencies.
+    # If AUMID lookup fails, caller uses well-known title-based fallbacks.
+    _ = hwnd
+    return None
 
 
 def _uwp_launch_command(aumid: Optional[str], window_title: str) -> Optional[str]:
@@ -371,6 +343,21 @@ def minimize_window(hwnd: int) -> None:
             win32gui.ShowWindow(int(hwnd), win32con.SW_MINIMIZE)
     except Exception as exc:
         print(f"[window_manager] minimize_window: {exc}")
+
+
+def focus_window(hwnd: int) -> None:
+    """Bring an existing window to the foreground and restore if minimized."""
+    if not win32gui.IsWindow(int(hwnd)):
+        return
+    try:
+        placement = win32gui.GetWindowPlacement(int(hwnd))
+        if placement[1] == win32con.SW_SHOWMINIMIZED:
+            win32gui.ShowWindow(int(hwnd), win32con.SW_RESTORE)
+        else:
+            win32gui.ShowWindow(int(hwnd), win32con.SW_SHOW)
+        win32gui.SetForegroundWindow(int(hwnd))
+    except Exception as exc:
+        print(f"[window_manager] focus_window: {exc}")
 
 
 def find_window_by_process(

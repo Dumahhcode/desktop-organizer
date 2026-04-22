@@ -56,7 +56,7 @@ def _get_layout_path() -> Path:
 
 def _default_data() -> dict:
     """Return an empty layouts document structure."""
-    return {"modes": []}
+    return {"modes": [], "quick_launch": []}
 
 
 def load_layouts() -> dict:
@@ -69,6 +69,8 @@ def load_layouts() -> dict:
             raise ValueError("invalid root")
         if not isinstance(data["modes"], list):
             raise ValueError("invalid modes")
+        if "quick_launch" not in data or not isinstance(data.get("quick_launch"), list):
+            data["quick_launch"] = []
         return data
     except Exception as exc:
         print(f"[layouts] load_layouts failed ({exc}), resetting to defaults")
@@ -202,6 +204,95 @@ def update_app_in_mode(mode_name: str, app_index: int, app_config: dict) -> bool
             save_layouts(data)
             return True
     return False
+
+
+def get_quick_launch() -> List[dict]:
+    """Return the quick launch entries list."""
+    data = load_layouts()
+    ql = data.get("quick_launch")
+    return list(ql) if isinstance(ql, list) else []
+
+
+def add_quick_launch(app_config: dict) -> bool:
+    """Append a quick launch entry."""
+    if not isinstance(app_config, dict):
+        return False
+    data = load_layouts()
+    data.setdefault("quick_launch", []).append(dict(app_config))
+    save_layouts(data)
+    return True
+
+
+def remove_quick_launch(index: int) -> bool:
+    """Remove a quick launch entry by index."""
+    data = load_layouts()
+    entries = data.setdefault("quick_launch", [])
+    if not isinstance(entries, list):
+        data["quick_launch"] = []
+        save_layouts(data)
+        return False
+    if index < 0 or index >= len(entries):
+        return False
+    entries.pop(index)
+    save_layouts(data)
+    return True
+
+
+def update_quick_launch(index: int, app_config: dict) -> bool:
+    """Replace a quick launch entry by index."""
+    if not isinstance(app_config, dict):
+        return False
+    data = load_layouts()
+    entries = data.setdefault("quick_launch", [])
+    if not isinstance(entries, list):
+        data["quick_launch"] = []
+        save_layouts(data)
+        return False
+    if index < 0 or index >= len(entries):
+        return False
+    entries[index] = dict(app_config)
+    save_layouts(data)
+    return True
+
+
+def launch_or_focus(index: int) -> dict:
+    """
+    Launch or focus a quick launch entry by index.
+
+    Focus behavior:
+    - if chrome_profile is set and process is chrome.exe, match by profile
+    - otherwise match by process name/title
+    """
+    try:
+        idx = int(index)
+    except Exception:
+        return {"ok": False, "error": "invalid index"}
+    entries = get_quick_launch()
+    if idx < 0 or idx >= len(entries):
+        return {"ok": False, "error": "entry not found"}
+    item = entries[idx] or {}
+    process_name = _normalize_process_name(str(item.get("process_name", "")))
+    title_match = str(item.get("window_title_match") or "").strip() or None
+    launch_path = str(item.get("launch_path") or "").strip()
+    chrome_profile = str(item.get("chrome_profile") or "").strip() or None
+    if not process_name or process_name == ".exe":
+        return {"ok": False, "error": "missing process_name"}
+    hwnd: Optional[int] = None
+    try:
+        if process_name == "chrome.exe" and chrome_profile:
+            hwnd = window_manager.find_chrome_window_by_profile(chrome_profile, title_match)
+        else:
+            hwnd = window_manager.find_window_by_process(process_name, title_match)
+        if hwnd:
+            window_manager.focus_window(int(hwnd))
+            return {"ok": True, "action": "focused"}
+        if not launch_path:
+            return {"ok": False, "error": "app not running and launch_path missing"}
+        if not window_manager.launch_app(launch_path):
+            return {"ok": False, "error": "launch failed"}
+        return {"ok": True, "action": "launched"}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
 
 
 def _normalize_process_name(name: str) -> str:
@@ -381,11 +472,15 @@ def capture_current_layout_to_mode(mode_name: str) -> int:
         proc = win.get("process_name") or ""
         if not proc:
             continue
+        launch_hint = str(win.get("launch_hint") or "").strip()
+        # UWP frame windows without a launch hint are not useful to capture.
+        if proc.lower() == "applicationframehost.exe" and not launch_hint:
+            continue
         x, y, w, h = win["rect"]
         entry: Dict[str, Any] = {
             "process_name": proc,
             "window_title_match": title[:120] if title else "",
-            "launch_path": win.get("launch_hint") or "",
+            "launch_path": launch_hint,
             "monitor_index": int(win.get("monitor_index", 0)),
             "position": {"x": x, "y": y, "width": w, "height": h},
             "preset": "custom",

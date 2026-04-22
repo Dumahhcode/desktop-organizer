@@ -26,6 +26,9 @@
       <div class="sidebar-body">
         <div class="sidebar-label">» MODES</div>
         <div id="mode-list" class="mode-list"></div>
+        <div class="sidebar-label ql-label">» QUICK LAUNCH</div>
+        <div id="quick-launch-list" class="quick-launch-list"></div>
+        <button type="button" id="btn-ql-add" class="btn-dashed btn-dashed-small">+ add app</button>
         <button type="button" id="btn-new-mode" class="btn-dashed">+ new mode</button>
       </div>
 
@@ -115,6 +118,35 @@
       <p class="hint" id="picker-hint"></p>
       <div id="picker-modes" class="picker-modes"></div>
       <button type="button" class="btn-ghost full" id="picker-dismiss">dismiss</button>
+    </div>
+  </div>
+
+  <div id="modal-quick-launch" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card">
+      <div class="modal-title" id="modal-ql-title">» add quick launch app</div>
+
+      <label class="field-label">running window</label>
+      <div class="row">
+        <select id="ql-fld-win" class="fld-select"><option value="">— pick one —</option></select>
+        <button type="button" class="btn-small" id="btn-ql-refresh-wins">refresh</button>
+      </div>
+
+      <label class="field-label">display name</label>
+      <input id="ql-fld-name" class="fld-input" type="text" autocomplete="off" placeholder="spotify" />
+
+      <label class="field-label">launch command</label>
+      <input id="ql-fld-launch" class="fld-input" type="text" autocomplete="off" />
+
+      <label class="field-label">process name</label>
+      <input id="ql-fld-proc" class="fld-input" type="text" autocomplete="off" placeholder="spotify.exe" />
+
+      <label class="field-label">title contains <span class="opt">(optional)</span></label>
+      <input id="ql-fld-title" class="fld-input" type="text" autocomplete="off" />
+
+      <div class="modal-actions">
+        <button type="button" class="btn-ghost" id="modal-ql-cancel">cancel</button>
+        <button type="button" class="btn-accent" id="modal-ql-save">save</button>
+      </div>
     </div>
   </div>
 
